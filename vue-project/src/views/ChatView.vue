@@ -10,6 +10,7 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import Live2DStage from '../components/Live2DStage.vue'
+import WeatherPanel from '../components/WeatherPanel.vue'
 import { useChatStream } from '../composables/useChatStream'
 
 // ------------------------------------------------------------------
@@ -62,24 +63,108 @@ const emit = defineEmits(['logout'])
 const { messages, isTyping, isThinking, sendMessage } = useChatStream()
 
 // ------------------------------------------------------------------
-// 顶部导航按钮（参考你发的那张蓝色导航条，图片和文字先留空）
-//   想加第 6 个按钮就在数组里再加一个 { icon: '', text: '' }
-//   想填内容时：icon 填图片路径（如 '/xxx.png'），text 填文字（如 '行程规划'）
+// 顶部导航按钮（红框里那三个）
+//   现在只做"按钮本体 + 选中高亮"，点一下切换高亮，功能都还没接。
+//   以后接功能：在 selectNav() 里根据 key 打开对应面板即可。
+//   想加第 4 个按钮，就在数组里再加一项（key 要唯一）。
 // ------------------------------------------------------------------
 const navButtons = ref([
-  { icon: '', text: '' },
-  { icon: '', text: '' },
-  { icon: '', text: '' },
-  { icon: '', text: '' },
-  { icon: '', text: '' },
+  {
+    key: 'weather',
+    text: '天气',
+    hint: '天气查询 · 即将上线',
+    // 太阳：一个圆 + 八条光线（图标直接用 path 画，不依赖图片，选中时跟着变蓝）
+    paths: [
+      'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8',
+      'M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+    ],
+  },
+  {
+    key: 'trip',
+    text: '行程',
+    hint: '行程规划 · 即将上线',
+    // 定位针：外轮廓 + 中间的小孔
+    paths: [
+      'M12 21s7-6.3 7-11.2A7 7 0 0 0 5 9.8C5 14.7 12 21 12 21Z',
+      'M12 12a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8',
+    ],
+  },
+  {
+    key: 'poster',
+    text: '旅行一图流',
+    hint: '旅行一图流 · 即将上线',
+    // 图片框：外框 + 左上小太阳 + 底部的山，用来表示"把行程画成一张图"
+    paths: [
+      'M5 3.5h14a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V5A1.5 1.5 0 0 1 5 3.5Z',
+      'M9.2 9.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5',
+      'M4.2 17.4l4.6-4.9 3.1 3.1 2.5-2.5 5.4 5.3',
+    ],
+  },
+  {
+    key: 'tts',
+    text: '和芙芙打电话',
+    hint: '语音通话 · 即将上线',
+    // 电话听筒：一条闭环的听筒轮廓（比起话筒更贴合"打电话"这个动作）
+    paths: [
+      'M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.9.6 2.8.7a2 2 0 0 1 1.7 2Z',
+    ],
+  },
 ])
 
 // 当前选中的是第几个按钮（点击就高亮，切换逻辑以后再填）
 const activeNav = ref(0)
 
+// ------------------------------------------------------------------
+// 天气小窗口
+//   showWeather 控制弹窗开不开；上次查过的城市存 localStorage，
+//   下次打开还是这个城市（隐私模式下 localStorage 会抛异常，所以都包 try）。
+// ------------------------------------------------------------------
+const showWeather = ref(false)
+// 上次查过的省 / 市，分开存；下次打开直接回到那个城市
+const weatherProvince = ref(readSavedPlace().province)
+const weatherCity = ref(readSavedPlace().city)
+
+function readSavedPlace(): { province: string; city: string } {
+  try {
+    return {
+      province: localStorage.getItem('weather-province') || '山东',
+      city: localStorage.getItem('weather-city') || '青岛',
+    }
+  } catch {
+    return { province: '山东', city: '青岛' }
+  }
+}
+
+function saveWeatherPlace(province: string, city: string) {
+  weatherCity.value = city
+  weatherProvince.value = province
+  try {
+    localStorage.setItem('weather-province', province)
+    localStorage.setItem('weather-city', city)
+  } catch {
+    // 存不进去不影响这次查询
+  }
+}
+
+function closeWeather() {
+  showWeather.value = false
+}
+
 function selectNav(index: number) {
+  const key = navButtons.value[index]?.key
+
+  // 天气：点一下开/关那个小窗口
+  if (key === 'weather') {
+    showWeather.value = !showWeather.value
+    activeNav.value = index
+    return
+  }
+
+  // 其它按钮：先只切高亮，并把天气窗口收起来
+  showWeather.value = false
   activeNav.value = index
-  // TODO: 以后在这里根据 index 切换功能面板（比如打开行程规划页）
+  // TODO: 以后在这里根据 key 打开对应面板：
+  //   trip → 行程规划   poster → 旅行一图流   tts → 语音通话
 }
 
 // ------------------------------------------------------------------
@@ -139,23 +224,54 @@ onBeforeUnmount(() => {
       </div>
 
       <!--
-        选项按钮：margin-left 把整组按钮往左拉（数值越大越靠右，
-        想再左一点就把 40px 改小或删掉，想居中就改成 margin: 0 auto）
+        红框里的功能按钮：天气 / 行程 / 旅行一图流 / 和芙芙打电话
+        整组按钮离标题的距离由 .chat-nav-wrap 的 margin-left 控制；
+        .chat-nav-wrap 同时是天气小窗口的定位参照（position: relative）
       -->
-      <nav class="chat-nav">
-        <button
-          v-for="(btn, i) in navButtons"
-          :key="i"
-          class="nav-btn"
-          :class="{ 'nav-btn--active': i === activeNav }"
-          @click="selectNav(i)"
-        >
-          <!-- 图标槽：btn.icon 有值才会渲染 <img>，现在留空不显示 -->
-          <img v-if="btn.icon" class="nav-btn__icon" :src="btn.icon" alt="" />
-          <!-- 文字槽：现在都是空字符串，填上就显示 -->
-          <span v-if="btn.text" class="nav-btn__text">{{ btn.text }}</span>
-        </button>
-      </nav>
+      <div class="chat-nav-wrap">
+        <nav class="chat-nav">
+          <button
+            v-for="(btn, i) in navButtons"
+            :key="btn.key"
+            type="button"
+            class="nav-btn"
+            :class="{ 'nav-btn--active': i === activeNav }"
+            :title="btn.hint"
+            :aria-pressed="i === activeNav"
+            @click="selectNav(i)"
+          >
+            <!-- 图标：直接用 path 画，不加载图片，选中时跟着文字一起变蓝 -->
+            <svg
+              class="nav-btn__icon"
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              aria-hidden="true"
+            >
+              <path
+                v-for="d in btn.paths"
+                :key="d"
+                :d="d"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+              <span class="nav-btn__text">{{ btn.text }}</span>
+            </button>
+        </nav>
+
+        <!-- 天气小窗口：点「天气」按钮弹出，点空白 / Esc / × 关闭 -->
+        <WeatherPanel
+          v-if="showWeather"
+          :initial-province="weatherProvince"
+          :initial-city="weatherCity"
+          @close="closeWeather"
+          @update:place="saveWeatherPlace"
+        />
+      </div>
 
       <div class="chat-user-box">
         <span class="chat-user">{{ props.username }}</span>
@@ -326,11 +442,19 @@ onBeforeUnmount(() => {
 }
 
 /* ---- 中间那排选项按钮 ---- */
+/* 外壳：负责定位（天气弹窗以它为参照）和离标题的距离 */
+.chat-nav-wrap {
+  position: relative;
+  display: flex;
+  margin-left: 48px;   /* ★ 整组按钮偏左的位置就在这调 */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 .chat-nav {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-left: 48px;   /* ★ 整组按钮偏左的位置就在这调 */
   flex: 0 1 auto;
   overflow-x: auto;    /* 按钮太多时横向滚动，不挤爆导航条 */
 }
@@ -338,33 +462,44 @@ onBeforeUnmount(() => {
 /* 按钮本体：胶囊形，默认透明底白字，选中变白底蓝字（参考图效果） */
 .nav-btn {
   flex: 0 0 auto;
-  min-width: 76px;             /* 空按钮也保持宽度，不会缩没 */
+  min-width: 84px;             /* 三个按钮等宽，图标+文字都放得下 */
   height: 32px;
-  padding: 0 16px;
+  padding: 0 14px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: none;
+  border: 1px solid transparent;  /* 和选中态的描边同宽，避免选中时抖动 */
   border-radius: 16px;
   background: transparent;
   color: rgba(255, 255, 255, 0.92);
   font-size: 0.92rem;
+  font-family: inherit;        /* 不继承的话 <button> 会用系统默认字体 */
   cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
 }
 .nav-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.nav-btn:focus-visible {
+  outline: 2px solid #fffdf8;
+  outline-offset: 2px;
+}
 
 /* 选中的按钮：白底蓝字 */
 .nav-btn--active {
   background: #fffdf8;
   color: #3d7fd6;
+  border-color: #fffdf8;
   font-weight: 500;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
 }
+.nav-btn--active:hover { background: #fffdf8; }
 
 /* 图标 / 文字两个槽位 */
-.nav-btn__icon { width: 18px; height: 18px; object-fit: contain; }
+.nav-btn__icon {
+  flex: 0 0 auto;
+  display: block;             /* svg 默认 inline，底部会多出几像素空隙 */
+}
 .nav-btn__text { white-space: nowrap; }
 
 /* ---- 右侧用户区 ---- */

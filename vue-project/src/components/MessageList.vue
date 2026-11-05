@@ -1,18 +1,22 @@
 <!-- ====================================================================
   MessageList —— 消息列表（红框里的上半部分）
-  职责只有两件事：
+  职责只有三件事：
     1. 把 messages 数组渲染成一左一右的气泡
-    2. 内容变化时自动滚到最底部（像微信那样）
+    2. 每句话用 BubbleText 逐字"冒"出来
+    3. 内容变化时自动滚到最底部（像微信那样）
 ==================================================================== -->
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import type { Message } from '../composables/useChatStream'
+import BubbleText from './BubbleText.vue'
 
 // messages 从父组件（ChatView）传进来，是聊天的完整记录
 const props = withDefaults(
   defineProps<{
     messages?: Message[]
+    // 整轮回复是否还没结束。现在没有闪烁光标了，所以界面暂时不读它，
+    // 留着给以后做"正在输出"的视觉状态（比如气泡呼吸 / 暂停动画）
     isTyping?: boolean
     // 模型还在思考（正文一个字都没出来）时显示"芙芙正在思考…"
     isThinking?: boolean
@@ -26,6 +30,19 @@ const props = withDefaults(
 
 // 整个滚动区域的 DOM 引用，用来控制滚动位置
 const listRef = ref<HTMLElement | null>(null)
+
+// ------------------------------------------------------------------
+// 要渲染的消息：把"空的 AI 占位气泡"过滤掉。
+//   useChatStream 在等后端第一个字时会先 push 一条 text 为空的 AI 消息，
+//   如果直接渲染，用户会先看见一个空气泡闪一下。
+//   这里等第一个字到了才让这一行挂载，气泡就能带着"啵"的动画从无到有。
+//   index 当作 :key 用，保证追加文字时这一行不会被重建、动画不会重播。
+// ------------------------------------------------------------------
+const visibleMessages = computed(() =>
+  props.messages
+    .map((msg, index) => ({ msg, index }))
+    .filter(({ msg }) => msg.role === 'user' || msg.text.length > 0)
+)
 
 // ------------------------------------------------------------------
 // 滚到底部：只要有新内容（消息增加 / AI 文字变长）就执行
@@ -50,21 +67,17 @@ watch(
 
     <!-- 每条消息一个气泡：role 决定靠左还是靠右 -->
     <div
-      v-for="(msg, i) in messages"
-      :key="i"
+      v-for="item in visibleMessages"
+      :key="item.index"
       class="msg-row"
-      :class="msg.role === 'user' ? 'msg-row--user' : 'msg-row--ai'"
+      :class="item.msg.role === 'user' ? 'msg-row--user' : 'msg-row--ai'"
     >
       <!-- AI 消息带个头像，用户消息就不放了（空间留给文字） -->
-      <img v-if="msg.role === 'ai'" class="msg-avatar" src="/1790414746809.png" alt="" />
+      <img v-if="item.msg.role === 'ai'" class="msg-avatar" src="/1790414746809.png" alt="" />
 
-      <div class="msg-bubble" :class="msg.role === 'user' ? 'msg-bubble--user' : 'msg-bubble--ai'">
-        {{ msg.text }}
-        <!-- AI 正在输出且轮到最后一条 AI 消息时，末尾闪一个光标 -->
-        <span
-          v-if="msg.role === 'ai' && isTyping && i === messages.length - 1"
-          class="msg-cursor"
-        ></span>
+      <div class="msg-bubble" :class="item.msg.role === 'user' ? 'msg-bubble--user' : 'msg-bubble--ai'">
+        <!-- 每个字自己蹦出来（英文按整词冒，不会把单词拆断） -->
+        <BubbleText :text="item.msg.text" />
       </div>
     </div>
     <!--
@@ -115,6 +128,33 @@ watch(
   object-fit: cover;
   border: 2px solid #fffdf8;
   flex: 0 0 auto;
+  animation: avatar-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes avatar-pop {
+  from { opacity: 0; transform: scale(0.5) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ---- 气泡"啵"地弹出来 ----
+   只在挂载时播一次；之后文字变长不会再重播（元素没重建）。
+   左边尖角 → 从左下发散，右边尖角 → 从右下发散，方向感才对。 */
+.msg-row--ai .msg-bubble {
+  transform-origin: bottom left;
+  animation: bubble-pop-left 0.44s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.msg-row--user .msg-bubble {
+  transform-origin: bottom right;
+  animation: bubble-pop-right 0.44s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes bubble-pop-left {
+  0%   { opacity: 0; transform: translate(-6px, 10px) scale(0.82); }
+  60%  { opacity: 1; transform: translate(2px, -2px) scale(1.03); }
+  100% { opacity: 1; transform: translate(0, 0) scale(1); }
+}
+@keyframes bubble-pop-right {
+  0%   { opacity: 0; transform: translate(6px, 10px) scale(0.82); }
+  60%  { opacity: 1; transform: translate(-2px, -2px) scale(1.03); }
+  100% { opacity: 1; transform: translate(0, 0) scale(1); }
 }
 
 /* ---- 气泡本体 ---- */
@@ -175,17 +215,11 @@ watch(
   30%           { transform: translateY(-3px); opacity: 1; }
 }
 
-/* ---- AI 打字时的闪烁光标 ---- */
-.msg-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 3px;
-  vertical-align: -0.15em;
-  background: #2f3e46;
-  animation: cursor-blink 0.8s steps(1) infinite;
-}
-@keyframes cursor-blink {
-  50% { opacity: 0; }
+/* 系统开了"减少动态效果"：气泡直接出现，不要弹跳 */
+@media (prefers-reduced-motion: reduce) {
+  .msg-bubble,
+  .msg-avatar {
+    animation: none;
+  }
 }
 </style>

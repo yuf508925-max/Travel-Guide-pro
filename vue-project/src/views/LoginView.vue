@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useAuth } from '../composables/useAuth'
 
-const emit = defineEmits(['login'])
+// 登录 / 注册都走这里；成功后 user 被赋值，App.vue 会自动切到聊天页
+const { login, register } = useAuth()
 
-const form = ref({ username: '', password: '' })
+const mode = ref<'login' | 'register'>('login')
+const form = ref({ username: '', password: '', confirm: '' })
 const error = ref('')
 const loading = ref(false)
+
 // ===== 时钟 =====
 const now = ref(new Date())
 let timer: ReturnType<typeof setInterval> | undefined
@@ -20,20 +24,48 @@ const dateStr = computed(() =>
   `${now.value.getFullYear()}/${now.value.getMonth() + 1}/${now.value.getDate()} ` +
   now.value.toLocaleDateString('zh-CN', { weekday: 'long' }))
 
+const isRegister = computed(() => mode.value === 'register')
 
-
-const handleSubmit = () => {
+function switchMode() {
+  mode.value = isRegister.value ? 'login' : 'register'
   error.value = ''
-  if (!form.value.username.trim() || !form.value.password.trim()) {
+}
+
+const handleSubmit = async () => {
+  error.value = ''
+  const username = form.value.username.trim()
+  if (!username || !form.value.password) {
     error.value = '请输入用户名和密码'
     return
   }
+  if (isRegister.value) {
+    if (username.length < 2) {
+      error.value = '用户名至少 2 个字符'
+      return
+    }
+    if (form.value.password.length < 6) {
+      error.value = '密码至少 6 位'
+      return
+    }
+    if (form.value.password !== form.value.confirm) {
+      error.value = '两次输入的密码不一致'
+      return
+    }
+  }
+
   loading.value = true
-  // 现在是假登录，将来换成真实接口：await fetch('/api/login', ...)
-  setTimeout(() => {
+  try {
+    if (isRegister.value) {
+      await register(username, form.value.password)
+    } else {
+      await login(username, form.value.password)
+    }
+    // 成功后不用手动切页：useAuth 的 user 变了，App.vue 会自动渲染 ChatView
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '操作失败，请稍后重试'
+  } finally {
     loading.value = false
-    emit('login', form.value.username.trim())
-  }, 600)
+  }
 }
 </script>
 
@@ -96,15 +128,43 @@ const handleSubmit = () => {
           <form class="login-form" @submit.prevent="handleSubmit">
             <div class="form-item">
               <label class="form-label" for="username">用户名：</label>
-              <input id="username" class="form-input" v-model="form.username" type="text" placeholder="请输入用户名" />
+              <input
+                id="username"
+                class="form-input"
+                v-model="form.username"
+                type="text"
+                placeholder="请输入用户名"
+                autocomplete="username"
+              />
             </div>
             <div class="form-item">
               <label class="form-label" for="password">密码：</label>
-              <input id="password" class="form-input" v-model="form.password" type="password" placeholder="请输入密码" />
+              <input
+                id="password"
+                class="form-input"
+                v-model="form.password"
+                type="password"
+                :placeholder="isRegister ? '至少 6 位' : '请输入密码'"
+                :autocomplete="isRegister ? 'new-password' : 'current-password'"
+              />
+            </div>
+            <div v-if="isRegister" class="form-item">
+              <label class="form-label" for="confirm">确认密码：</label>
+              <input
+                id="confirm"
+                class="form-input"
+                v-model="form.confirm"
+                type="password"
+                placeholder="再输一次密码"
+                autocomplete="new-password"
+              />
             </div>
             <p v-if="error" class="form-error">{{ error }}</p>
             <button class="login-btn" type="submit" :disabled="loading">
-              {{ loading ? '登录中…' : '登录' }}
+              {{ loading ? (isRegister ? '注册中…' : '登录中…') : (isRegister ? '注册' : '登录') }}
+            </button>
+            <button class="switch-btn" type="button" @click="switchMode">
+              {{ isRegister ? '已有账号？返回登录' : '没有账号？点此注册' }}
             </button>
           </form>
         </div>
@@ -283,6 +343,19 @@ const handleSubmit = () => {
 }
 .login-btn:hover:not(:disabled) { background: #256354; }
 .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* 登录 / 注册 切换链接 */
+.switch-btn {
+  width: 100%;
+  height: 36px;
+  margin-top: 8px;
+  border: none;
+  background: transparent;
+  color: #2f7d6e;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.switch-btn:hover { text-decoration: underline; }
 
 /* ===== 窄屏：上下排列 ===== */
 @media (max-width: 1024px) {

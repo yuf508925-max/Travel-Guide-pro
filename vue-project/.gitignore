@@ -45,3 +45,7 @@ __pycache__/
 *.py[cod]
 .env
 .env.local
+
+# SQLite 数据库（用户 / 会话都在里面，绝不提交）
+*.db
+*.sqlite3

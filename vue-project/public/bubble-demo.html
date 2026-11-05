@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<!-- ====================================================================
+  bubble-demo.html —— "冒泡输出"效果预览页（纯静态，不需要后端）
+  用法：npm run dev 后打开 http://localhost:5173/bubble-demo.html
+  它只是把 MessageList.vue + BubbleText.vue 的动画原样搬出来给你看效果，
+  正式界面里的效果和这里一模一样。
+==================================================================== -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>冒泡输出 · 效果预览</title>
+<style>
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px 22px;
+    font-family: 'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+    /* 和海面背景一个色系 */
+    background:
+      radial-gradient(circle at 30% 20%, rgba(90, 190, 178, 0.55), transparent 55%),
+      radial-gradient(circle at 75% 85%, rgba(26, 96, 92, 0.85), transparent 60%),
+      linear-gradient(160deg, #0d4a4a 0%, #0a3d3f 45%, #07302f 100%);
+  }
+
+  /* ---- 聊天面板：和 ChatView 里的红框同款 ---- */
+  .chat-panel {
+    width: min(560px, 100%);
+    height: min(72vh, 560px);
+    display: flex;
+    flex-direction: column;
+    border: 2px solid rgba(255, 253, 248, 0.55);
+    border-radius: 18px;
+    background: rgba(20, 60, 60, 0.30);
+    backdrop-filter: blur(2px);
+    overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  }
+
+  .msg-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* ---- 一行消息 ---- */
+  .msg-row { display: flex; align-items: flex-end; gap: 8px; }
+  .msg-row--ai { justify-content: flex-start; }
+  .msg-row--user { justify-content: flex-end; }
+
+  /* ---- AI 头像 ---- */
+  .msg-avatar {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #fffdf8;
+    flex: 0 0 auto;
+    animation: avatar-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  @keyframes avatar-pop {
+    from { opacity: 0; transform: scale(0.5) translateY(6px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  /* ---- 气泡：弹出动画 ---- */
+  .msg-bubble {
+    max-width: 78%;
+    padding: 10px 14px;
+    border-radius: 14px;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  .msg-bubble--ai {
+    background: #fffdf8;
+    color: #2f3e46;
+    border: 1.5px solid #dfe7e2;
+    border-top-left-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  }
+  .msg-bubble--user {
+    background: #2f7d6e;
+    color: #fff;
+    border-top-right-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.10);
+  }
+  .msg-row--ai  .msg-bubble { transform-origin: bottom left;  animation: pop-left 0.44s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+  .msg-row--user .msg-bubble { transform-origin: bottom right; animation: pop-right 0.44s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+  @keyframes pop-left {
+    0%   { opacity: 0; transform: translate(-6px, 10px) scale(0.82); }
+    60%  { opacity: 1; transform: translate(2px, -2px) scale(1.03); }
+    100% { opacity: 1; transform: translate(0, 0) scale(1); }
+  }
+  @keyframes pop-right {
+    0%   { opacity: 0; transform: translate(6px, 10px) scale(0.82); }
+    60%  { opacity: 1; transform: translate(-2px, -2px) scale(1.03); }
+    100% { opacity: 1; transform: translate(0, 0) scale(1); }
+  }
+
+  /* ---- 冒泡单元：每个字自己浮上来 ---- */
+  .unit { display: inline-block; transform-origin: 50% 100%;
+    animation: bubble-char 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+  @keyframes bubble-char {
+    0%   { opacity: 0; transform: translateY(0.45em) scale(0.55); filter: blur(2px); }
+    55%  { opacity: 1; transform: translateY(-0.08em) scale(1.06); filter: blur(0); }
+    100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+  }
+  .text { white-space: pre-wrap; }
+
+  /* ---- 输入区 ---- */
+  .input-bar {
+    display: flex; gap: 10px; padding: 12px 14px;
+    border-top: 1px solid rgba(255, 253, 248, 0.22);
+    background: rgba(10, 40, 40, 0.35);
+  }
+  .input-bar input {
+    flex: 1; min-width: 0; height: 38px; padding: 0 14px;
+    border: 1.5px solid rgba(255, 253, 248, 0.35); border-radius: 19px;
+    background: rgba(255, 253, 248, 0.08); color: #fffdf8; font-size: 0.93rem; outline: none;
+  }
+  .input-bar input::placeholder { color: rgba(255, 253, 248, 0.5); }
+  .input-bar input:focus { border-color: rgba(255, 253, 248, 0.75); }
+  .input-bar button {
+    height: 38px; padding: 0 20px; border: none; border-radius: 19px;
+    background: #fffdf8; color: #2f7d6e; font-size: 0.93rem; font-weight: 500; cursor: pointer;
+  }
+  .input-bar button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  /* ---- 顶部小提示 ---- */
+  .hint {
+    position: fixed; left: 50%; top: 14px; transform: translateX(-50%);
+    color: rgba(255, 253, 248, 0.62); font-size: 0.8rem; letter-spacing: 0.02em;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .msg-bubble, .msg-avatar, .unit { animation: none; }
+  }
+</style>
+</head>
+<body>
+<p class="hint">冒泡输出预览 · 随便说句话试试</p>
+
+<section class="chat-panel">
+  <div class="msg-list" id="list"></div>
+
+  <div class="input-bar">
+    <input id="input" type="text" placeholder="告诉我目的地、天数、预算和偏好～" />
+    <button id="send">发送</button>
+  </div>
+</section>
+
+<script>
+// =====================================================================
+// 和 BubbleText.vue 同一套切词规则：中文按字、英文按词、空白保持纯文本
+// =====================================================================
+const MAX_ORDER = 28
+const MAX_WORD = 16
+
+function tokenize(text) {
+  const out = []
+  let i = 0
+  let order = 0
+  const push = (value, bubble) => {
+    out.push({ value, bubble, order: bubble ? Math.min(order++, MAX_ORDER) : 0 })
+  }
+
+  while (i < text.length) {
+    const ch = text[i]
+
+    if (/\s/.test(ch)) {
+      let j = i
+      while (j < text.length && /\s/.test(text[j])) j++
+      push(text.slice(i, j), false)
+      i = j
+      continue
+    }
+
+    if (/[A-Za-z0-9]/.test(ch)) {
+      let j = i
+      while (j < text.length) {
+        const c = text[j]
+        const isWordChar = /[A-Za-z0-9'’\-_]/.test(c)
+        const isInnerDot = c === '.' && /[A-Za-z0-9]/.test(text[j + 1] || '')
+        if (!isWordChar && !isInnerDot) break
+        j++
+      }
+      const word = text.slice(i, j)
+      if (word.length > MAX_WORD) for (const c of word) push(c, true)
+      else push(word, true)
+      i = j
+      continue
+    }
+
+    push(ch, true)
+    i++
+  }
+  return out
+}
+
+// 把一个单元格（字或词）挂进气泡
+function appendChunk(container, chunk) {
+  const el = document.createElement('span')
+  el.textContent = chunk.value
+  if (chunk.bubble) {
+    el.className = 'unit'
+    el.style.setProperty('--bubble-order', String(chunk.order))
+  }
+  container.appendChild(el)
+}
+
+const list = document.getElementById('list')
+const input = document.getElementById('input')
+const sendBtn = document.getElementById('send')
+
+function addBubble(role) {
+  const row = document.createElement('div')
+  row.className = 'msg-row ' + (role === 'user' ? 'msg-row--user' : 'msg-row--ai')
+
+  if (role === 'ai') {
+    const avatar = document.createElement('img')
+    avatar.className = 'msg-avatar'
+    avatar.src = '1790414746809.png'   // 和正式界面同一个头像
+    avatar.alt = ''
+    row.appendChild(avatar)
+  }
+
+  const bubble = document.createElement('div')
+  bubble.className = 'msg-bubble ' + (role === 'user' ? 'msg-bubble--user' : 'msg-bubble--ai')
+  row.appendChild(bubble)
+  list.appendChild(row)
+
+  const text = document.createElement('span')
+  text.className = 'text'
+  bubble.appendChild(text)
+  return { bubble, text }
+}
+
+function scrollToBottom() { list.scrollTop = list.scrollHeight }
+
+// 逐字把一段文字冒出来（模拟正式界面的流式输出节奏：约 20 字/秒）
+function streamText(container, content, done) {
+  const chunks = tokenize(content)
+
+  let i = 0
+  const timer = setInterval(() => {
+    if (i >= chunks.length) {
+      clearInterval(timer)
+      done && done()
+      return
+    }
+    // 积压多了就一次放两三个字，别让长回复等太久
+    const batch = chunks.length - i > 40 ? 2 : 1
+    for (let k = 0; k < batch && i < chunks.length; k++) appendChunk(container, chunks[i++])
+    scrollToBottom()
+  }, 50)
+}
+
+// 开场白：和你截图里那句一模一样
+const GREETING =
+  '你好呀，旅行者！我是芙宁娜，你的专属旅行向导～\n' +
+  '想去哪儿玩？海边、山里，还是吃遍一座城？\n' +
+  '告诉我目的地、天数、预算和偏好，我帮你把行程排得明明白白！'
+
+window.addEventListener('load', () => {
+  const ai = addBubble('ai')
+  streamText(ai.text, GREETING, () => {
+    // 带 ?auto=1 打开时自动演示一次"用户发问 → AI 回复"，方便截图
+    if (location.search.includes('auto=1')) askAndReply(SAMPLE_QUESTION)
+  })
+})
+
+function reply(userText) {
+  const t = userText.trim()
+  if (!t) return
+  // 回声式假回复：只为展示冒泡效果
+  return (
+    `收到！「${t}」这个方向不错～\n` +
+    '我先把大框架排出来：第一天落地先逛主城区，第二天去海边看日落，' +
+    '第三天留给小吃街。预算按人均 3000 左右算，你觉得合适吗？\n' +
+    'Travel light, dream big. 出发前记得看一眼天气哦。'
+  )
+}
+
+const SAMPLE_QUESTION = '我想去青岛玩三天，预算 3000，喜欢海边和小吃'
+
+// 演示一次完整问答：用户那句也冒出来，然后 AI 回复逐字冒
+function askAndReply(value) {
+  const t = (value || '').trim()
+  if (!t) return
+  sendBtn.disabled = true
+
+  const user = addBubble('user')
+  const chunks = tokenize(t)
+  // 用户自己说的这句也冒一下，但快一点
+  chunks.forEach((c, idx) => {
+    setTimeout(() => { appendChunk(user.text, c); scrollToBottom() }, idx * 16)
+  })
+
+  const wait = Math.min(chunks.length * 16, 700) + 260
+  setTimeout(() => {
+    const ai = addBubble('ai')
+    streamText(ai.text, reply(t), () => { sendBtn.disabled = false })
+  }, wait)
+}
+
+sendBtn.addEventListener('click', () => {
+  const value = input.value
+  if (!value.trim()) return
+  input.value = ''
+  askAndReply(value)
+})
+
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendBtn.click()
+})
+</script>
+</body>
+</html>

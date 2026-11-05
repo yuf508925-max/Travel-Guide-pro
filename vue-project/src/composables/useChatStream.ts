@@ -119,8 +119,12 @@ export function useChatStream(options?: {
     messages.value.push({ role: 'user', text: content })
 
     // 3. 塞一条"空的 AI 消息"占位，后面一个字一个字往里填
-    const aiMsg: Message = { role: 'ai', text: '' }
-    messages.value.push(aiMsg)
+    //    ★ 关键：必须把"响应式代理"取出来再改！
+    //      直接改 push 进去的那个原始对象不会触发重新渲染
+    //      （原始对象没有走 Proxy 的 set 陷阱），表现就是气泡一直是空的。
+    //      从 messages.value 里读出来的才是被代理过的对象。
+    messages.value.push({ role: 'ai', text: '' })
+    const aiMsg = messages.value[messages.value.length - 1] as Message
 
     isTyping.value = true
     isThinking.value = true       // 立刻进入"思考中"，前端马上有反馈
