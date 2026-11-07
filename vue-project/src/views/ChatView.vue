@@ -11,6 +11,11 @@ import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import Live2DStage from '../components/Live2DStage.vue'
 import WeatherPanel from '../components/WeatherPanel.vue'
+import BalanceWidget from '../components/BalanceWidget.vue'
+import RoutePlanner from '../components/RoutePlanner.vue'
+import { resetAmapConfig } from '../composables/useAmap'
+import VolumeMenu from '../components/VolumeMenu.vue'
+import SettingsMenu from '../components/SettingsMenu.vue'
 import { useChatStream } from '../composables/useChatStream'
 
 // ------------------------------------------------------------------
@@ -82,7 +87,7 @@ const navButtons = ref([
   {
     key: 'trip',
     text: '行程',
-    hint: '行程规划 · 即将上线',
+    hint: '行程规划 · 高德路线地图',
     // 定位针：外轮廓 + 中间的小孔
     paths: [
       'M12 21s7-6.3 7-11.2A7 7 0 0 0 5 9.8C5 14.7 12 21 12 21Z',
@@ -120,6 +125,8 @@ const activeNav = ref(0)
 //   下次打开还是这个城市（隐私模式下 localStorage 会抛异常，所以都包 try）。
 // ------------------------------------------------------------------
 const showWeather = ref(false)
+// 行程面板（高德路线地图）
+const showRoute = ref(false)
 // 上次查过的省 / 市，分开存；下次打开直接回到那个城市
 const weatherProvince = ref(readSavedPlace().province)
 const weatherCity = ref(readSavedPlace().city)
@@ -150,18 +157,43 @@ function closeWeather() {
   showWeather.value = false
 }
 
+// ------------------------------------------------------------------
+// 右上角的小弹窗：音量 / 设置
+//   同一时刻只允许开一个（开设置就收起音量，反之亦然），
+//   打开天气弹窗时也会把这两个收起来。
+// ------------------------------------------------------------------
+const openMenu = ref<'volume' | 'settings' | null>(null)
+
+function toggleMenu(name: 'volume' | 'settings') {
+  openMenu.value = openMenu.value === name ? null : name
+  if (openMenu.value) showWeather.value = false
+}
+
+
+
 function selectNav(index: number) {
   const key = navButtons.value[index]?.key
+  openMenu.value = null
 
   // 天气：点一下开/关那个小窗口
   if (key === 'weather') {
+    showRoute.value = false
     showWeather.value = !showWeather.value
+    activeNav.value = index
+    return
+  }
+
+  // 行程：打开路线规划面板（高德地图）
+  if (key === 'trip') {
+    showWeather.value = false
+    showRoute.value = !showRoute.value
     activeNav.value = index
     return
   }
 
   // 其它按钮：先只切高亮，并把天气窗口收起来
   showWeather.value = false
+  showRoute.value = false
   activeNav.value = index
   // TODO: 以后在这里根据 key 打开对应面板：
   //   trip → 行程规划   poster → 旅行一图流   tts → 语音通话
@@ -190,9 +222,6 @@ function applyVolume() {
 // 滑块拖动 / 静音切换都会触发
 watch([volume, muted], applyVolume)
 
-function toggleMute() {
-  muted.value = !muted.value
-}
 
 // 浏览器默认拦截"带声音的自动播放"，被拦时等用户第一次点击页面再试一次
 function tryPlay() {
@@ -210,6 +239,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', resumeOnFirstGesture)
+  // 退出登录时清掉当前账号的高德配置缓存，换账号会重新从后端读
+  resetAmapConfig()
 })
 </script>
 
@@ -276,13 +307,18 @@ onBeforeUnmount(() => {
       <div class="chat-user-box">
         <span class="chat-user">{{ props.username }}</span>
 
-        <!-- 音量键：小喇叭（点击静音 / 恢复）+ 滑块（0~100） -->
-        <div class="volume-box">
+        <!-- 右上角工具区：音量（点开才调） + 设置（填 API Key） -->
+        <div class="header-tools">
+          <!-- 余额：在音量左边，点开看明细 -->
+          <BalanceWidget />
+
+          <!-- 音量：点一下弹出小面板，里面才有滑块 -->
           <button
-            class="volume-btn"
-            :class="{ 'volume-btn--muted': muted }"
-            :title="muted ? '取消静音' : '静音'"
-            @click="toggleMute"
+            class="tool-btn"
+            :class="{ 'tool-btn--on': openMenu === 'volume', 'tool-btn--muted': muted }"
+            :title="muted ? '音量（已静音）' : `音量 ${volume}%`"
+            :aria-expanded="openMenu === 'volume'"
+            @click="toggleMenu('volume')"
           >
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
               <path d="M4 9.5h3.2L11.5 6v12l-4.3-3.5H4z" fill="currentColor" />
@@ -314,13 +350,47 @@ onBeforeUnmount(() => {
             </svg>
           </button>
 
-          <input
-            v-model.number="volume"
-            class="volume-slider"
-            type="range"
-            min="0"
-            max="100"
-            :title="muted ? '已静音' : `音量 ${volume}%`"
+
+          <!-- 设置：齿轮，点开可以填自己的 API Key -->
+          <button
+            class="tool-btn"
+            :class="{ 'tool-btn--on': openMenu === 'settings' }"
+            title="设置（API Key）"
+            :aria-expanded="openMenu === 'settings'"
+            @click="toggleMenu('settings')"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.73v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+              />
+              <circle cx="12" cy="12" r="3.2" />
+            </svg>
+          </button>
+
+          <!-- 两个小弹窗都挂在工具区里，以它为定位参照 -->
+          <VolumeMenu
+            v-if="openMenu === 'volume'"
+            :volume="volume"
+            :muted="muted"
+            @update:volume="volume = $event"
+            @update:muted="muted = $event"
+            @close="openMenu = null"
+          />
+          <!-- AI 正在回复时锁住设置，避免一轮回复中途换模型 -->
+          <SettingsMenu
+            v-if="openMenu === 'settings'"
+            :locked="isTyping"
+            @close="openMenu = null"
           />
         </div>
 
@@ -407,6 +477,9 @@ onBeforeUnmount(() => {
         <MessageInput :disabled="isTyping" @send="sendMessage" />
       </section>
     </main>
+
+    <!-- 行程面板：填出发地/目的地，用高德地图画路线 -->
+    <RoutePlanner v-if="showRoute" @close="showRoute = false" />
   </div>
 </template>
 
@@ -511,16 +584,17 @@ onBeforeUnmount(() => {
 }
 .chat-user { font-size: 0.95rem; opacity: 0.95; }
 
-/* ---- 音量键：小喇叭 + 细滑块 ---- */
-.volume-box {
+/* ---- 右上角工具按钮：音量 / 设置 ---- */
+.header-tools {
+  position: relative;      /* 音量、设置两个小弹窗以它为定位参照 */
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.volume-btn {
-  width: 28px;
-  height: 28px;
+.tool-btn {
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -531,14 +605,12 @@ onBeforeUnmount(() => {
   cursor: pointer;
   transition: background 0.2s, opacity 0.2s;
 }
-.volume-btn:hover { background: rgba(255, 255, 255, 0.16); }
-.volume-btn--muted { opacity: 0.6; }
-
-/* accent-color 一行就能把滑块染成米白色，不用手写伪元素 */
-.volume-slider {
-  width: 90px;
-  accent-color: #fffdf8;
-  cursor: pointer;
+.tool-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.tool-btn--on { background: rgba(255, 255, 255, 0.24); }
+.tool-btn--muted { opacity: 0.6; }
+.tool-btn:focus-visible {
+  outline: 2px solid #fffdf8;
+  outline-offset: 2px;
 }
 
 .chat-logout {

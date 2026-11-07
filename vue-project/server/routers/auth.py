@@ -143,18 +143,20 @@ def logout(request: Request, response: Response):
 
 
 # ---------------------------------------------------------------------
-# require_user：需要登录的接口用 Depends 保护，例如
-#   @router.post("/chat", dependencies=[Depends(require_user)])
+# 取当前登录用户，给需要登录的接口用：
+#   current_user   未登录直接 401
+#   optional_user  未登录返回 None（比如聊天：登录了就用账号里的 Key，
+#                  没登录就没有 Key，聊天会返回"请先登录"）
 # ---------------------------------------------------------------------
-def require_user(request: Request) -> str:
+def optional_user(request: Request) -> dict | None:
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
-        raise HTTPException(401, "请先登录")
+        return None
 
     with db() as conn:
         row = conn.execute(
             """
-            SELECT u.username
+            SELECT u.id, u.username
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > datetime('now')
@@ -163,5 +165,17 @@ def require_user(request: Request) -> str:
         ).fetchone()
 
     if not row:
-        raise HTTPException(401, "登录已过期")
-    return row["username"]
+        return None
+    return {"id": row["id"], "username": row["username"]}
+
+
+def current_user(request: Request) -> dict:
+    user = optional_user(request)
+    if user is None:
+        raise HTTPException(401, "登录已过期，请重新登录")
+    return user
+
+
+def require_user(request: Request) -> str:
+    """只要用户名（老接口用）"""
+    return current_user(request)["username"]

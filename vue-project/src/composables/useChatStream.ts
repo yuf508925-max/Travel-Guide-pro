@@ -142,6 +142,8 @@ export function useChatStream(options?: {
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
+        // 不用在这里带 Key：后端会根据 Session Cookie 找到当前账号，
+        // 再用该账号在 user_providers 表里激活的那套 Key / Base URL / 模型（见 llm_settings.py）
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: content, history }),
       })
@@ -194,7 +196,7 @@ export function useChatStream(options?: {
       aiMsg.text =
         `芙芙这边好像断线了：${reason}\n` +
         '检查一下：① 后端 uvicorn server.app:app --port 8000 起了吗 ' +
-        '② server/.env 里填 DEEPSEEK_API_KEY 了吗'
+        '② 右上角「设置」里添加并启用一套 API Key 了吗'
     } finally {
       isTyping.value = false                // 无论成败都要解锁输入框
       isThinking.value = false

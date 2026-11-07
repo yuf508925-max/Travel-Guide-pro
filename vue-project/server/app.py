@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from .config import CORS_ORIGINS, DEEPSEEK_MODEL
 from .db import init_db
 from .providers.deepseek import aclose
-from .routers import auth, chat, poster, trip, tts, weather
+from .routers import auth, chat, map_settings, poster, providers, routes, trains, trip, tts, weather
 
 
 @asynccontextmanager
@@ -51,6 +51,10 @@ app.add_middleware(
 # ---- 已实现 ----
 app.include_router(auth.router)      # /api/auth/*        注册 / 登录 / 登出 / 当前用户
 app.include_router(chat.router)      # POST /api/chat（SSE 流式对话）
+app.include_router(providers.router) # /api/providers     多套 Key / 多个模型 / 切换
+app.include_router(routes.router)    # /api/routes        行程面板的搜索记录（按账号隔离）
+app.include_router(map_settings.router)  # /api/map      每个账号自己的高德 Key
+app.include_router(trains.router)    # /api/trains        动车班次（12306 余票）
 
 # ---- 预留（文件里是空壳，实现后自动生效）----
 app.include_router(poster.router)    # POST /api/poster/* 旅行一图流

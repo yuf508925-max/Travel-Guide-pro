@@ -7,10 +7,11 @@
 
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..llm_settings import resolve_llm
 from ..providers.deepseek import stream_chat
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -24,7 +25,9 @@ class ChatIn(BaseModel):
 
 
 @router.post("/chat")
-async def chat(body: ChatIn):
+async def chat(body: ChatIn, request: Request):
+    # Key 只来自当前登录账号在「设置」里配置并激活的那套（见 llm_settings.py）
+    llm = resolve_llm(request)
     # 前端的 role 是 'user' / 'ai'，转成模型要的 'user' / 'assistant'
     history = [
         ("assistant" if m.get("role") == "ai" else "user", m.get("text", ""))
@@ -34,7 +37,13 @@ async def chat(body: ChatIn):
 
     async def event_stream():
         try:
-            async for kind, piece in stream_chat(history, body.message):
+            async for kind, piece in stream_chat(
+                history,
+                body.message,
+                api_key=llm["api_key"],
+                base_url=llm["base_url"],
+                model=llm["model"],
+            ):
                 # kind: 'status' | 'thinking' | 'text'
                 payload = json.dumps({"type": kind, "text": piece}, ensure_ascii=False)
                 yield f"data: {payload}\n\n"

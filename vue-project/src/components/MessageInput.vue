@@ -7,6 +7,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import ModelSwitcher from './ModelSwitcher.vue'
 
 // 父组件用 @send="sendMessage" 来接这里抛出去的内容
 const emit = defineEmits(['send'])
@@ -57,9 +58,13 @@ function onKeydown(e: KeyboardEvent) {
       @keydown="onKeydown"
     ></textarea>
 
-    <button class="msg-input__send" :disabled="props.disabled" @click="handleSend">
-      {{ props.disabled ? '芙芙输入中…' : '发送' }}
-    </button>
+    <!-- 右侧一列：上面是「切换 API / 模型」，下面是发送 -->
+    <div class="msg-input__actions">
+      <ModelSwitcher :disabled="props.disabled" />
+      <button class="msg-input__send" :disabled="props.disabled" @click="handleSend">
+        {{ props.disabled ? '芙芙输入中…' : '发送' }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -89,6 +94,15 @@ function onKeydown(e: KeyboardEvent) {
 }
 .msg-input__box:focus { border-color: #2f7d6e; }
 .msg-input__box:disabled { background: #f2f5f3; cursor: not-allowed; }
+
+/* ---- 右侧操作列：模型切换 + 发送 ---- */
+.msg-input__actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
 
 /* ---- 发送按钮 ---- */
 .msg-input__send {
