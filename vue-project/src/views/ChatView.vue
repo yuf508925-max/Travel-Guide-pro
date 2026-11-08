@@ -242,7 +242,7 @@ function selectNav(index: number) {
 // ------------------------------------------------------------------
 const BGM_SRC = "/Travelers' encore - Andrew Prahlow.mp3"
 
-const bgmVolume = ref(50)    // 背景音乐 0~100
+const bgmVolume = ref(20)    // 背景音乐 0~100
 const voiceVolume = ref(80)  // 芙芙说话 0~100（电话窗口用）
 const muted = ref(false)     // 背景音乐静音开关，和语音无关
 const voiceMuted = ref(false) // 语音静音开关（电话里的芙芙）

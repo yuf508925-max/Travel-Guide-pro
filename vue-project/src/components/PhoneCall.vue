@@ -219,8 +219,20 @@ async function fetchAudio(text: string): Promise<Blob> {
     body: JSON.stringify({ text }),
   })
   if (!res.ok) {
-    const data = await res.json().catch(() => null)
-    throw new Error((data && data.detail) || '语音合成失败')
+    // 后端出错时可能是 JSON（{detail}），也可能是纯文本（Internal Server Error）
+    const raw = await res.text().catch(() => '')
+    let detail = raw
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed.detail === 'string') detail = parsed.detail
+    } catch {
+      // 不是 JSON，就原样当文本
+    }
+    throw new Error(
+      detail
+        ? `语音合成失败（HTTP ${res.status}）：${detail}`
+        : `语音合成失败（HTTP ${res.status}）`
+    )
   }
   return res.blob()
 }

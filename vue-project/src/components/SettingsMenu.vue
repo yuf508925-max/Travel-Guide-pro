@@ -116,7 +116,6 @@ const ttsHasKey = ref(false)
 const ttsKeyMasked = ref('')
 const ttsSaving = ref(false)
 const ttsMsg = ref('')
-const ttsPrompt = ref('')
 const ttsLocal = ref<{ url: string; ready: boolean; ref_audio: string } | null>(null)
 
 async function loadTts() {
@@ -127,7 +126,6 @@ async function loadTts() {
     ttsHasKey.value = Boolean(data.has_key)
     ttsKeyMasked.value = data.key_masked ?? ''
     ttsModel.value = data.model || 'qwen3-tts-flash'
-    ttsPrompt.value = data.prompt_text || ''
     if (data.local) ttsLocal.value = data.local
     if (Array.isArray(data.models) && data.models.length) ttsModels.value = data.models
   } catch {
@@ -147,7 +145,6 @@ async function saveTts() {
       body: JSON.stringify({
         api_key: ttsKeyDraft.value.trim(),
         model: ttsModel.value.trim(),
-        prompt_text: ttsPrompt.value.trim(),
       }),
     })
     const data = await res.json().catch(() => null)
@@ -441,16 +438,6 @@ function onKeydown(event: KeyboardEvent) {
             spellcheck="false"
             :placeholder="ttsHasKey ? `已保存 ${ttsKeyMasked}（留空 = 不修改）` : 'DashScope API Key（sk-…）'"
           />
-          <label class="tts-field">
-            <span class="tts-field__label">参考音频文字</span>
-            <input
-              v-model="ttsPrompt"
-              class="menu-input menu-input--wide"
-              type="text"
-              spellcheck="false"
-              placeholder="ref.wav 里说的那句话（填了更像本人）"
-            />
-          </label>
           <label class="tts-field">
             <span class="tts-field__label">模型</span>
             <select v-model="ttsModel" class="menu-input tts-select">

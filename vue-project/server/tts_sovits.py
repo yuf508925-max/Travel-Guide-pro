@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .config import (
     SOVITS_API_URL,
+    SOVITS_USE_PROMPT_TEXT,
     SOVITS_PROMPT_LANG,
     SOVITS_PROMPT_TEXT,
     SOVITS_REF_AUDIO,
@@ -55,7 +56,8 @@ def synthesize_sync(text: str, prompt_text: str = "") -> bytes:
         "text_lang": SOVITS_TEXT_LANG,
         "ref_audio_path": str(ref),
         "prompt_lang": SOVITS_PROMPT_LANG,
-        "prompt_text": prompt_text or SOVITS_PROMPT_TEXT,
+        # 只有确认参考音频与文字匹配时才发送，否则模型会把提示也念出来
+        "prompt_text": (prompt_text or SOVITS_PROMPT_TEXT) if SOVITS_USE_PROMPT_TEXT else "",
         "text_split_method": "cut5",
         "batch_size": 1,
         "media_type": "wav",

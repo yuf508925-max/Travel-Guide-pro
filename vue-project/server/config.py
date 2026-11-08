@@ -28,6 +28,10 @@ SOVITS_REF_AUDIO = str(
     Path(__file__).resolve().parent.parent / "models" / "Furina_GPT_SoVITS" / "ref.wav"
 )
 # 参考音频对应的文字（GPT-SoVITS 需要）
-SOVITS_PROMPT_TEXT = ""
+SOVITS_PROMPT_TEXT = "富有的、贫穷的，带着酒杯或一无所有的子民们，举起酒杯吧！"
+# 是否把上面这句作为"参考文本"发给 GPT-SoVITS。
+# 实测当前 ref.wav 和这句话对不上：带上它模型会把这句话也念出来（2 秒变 7~8 秒）。
+# 换成与这句话对应的参考音频后，把它改成 True 即可。
+SOVITS_USE_PROMPT_TEXT = True
 SOVITS_TEXT_LANG = "zh"
 SOVITS_PROMPT_LANG = "zh"

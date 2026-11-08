@@ -934,7 +934,7 @@ onBeforeUnmount(() => {
 
         <!-- 跨市：12306 动车/高铁班次 -->
         <section v-if="trainQuery" class="train-box">
-          <p class="train-box__head">
+          <div class="train-box__head">
             <span class="leg-kind" data-kind="动车">动车</span>
             <div class="station-pick">
               <button
@@ -992,7 +992,7 @@ onBeforeUnmount(() => {
               :title="'查哪天的车'"
               @change="reloadTrains"
             />
-          </p>
+          </div>
 
           <p v-if="trainLoading" class="train-box__note">正在查 12306…</p>
           <p v-else-if="trainError" class="train-box__err">{{ trainError }}</p>

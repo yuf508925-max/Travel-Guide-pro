@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from ..db import db
 from ..llm_settings import mask_key
-from ..config import SOVITS_API_URL
+from ..config import SOVITS_API_URL, SOVITS_PROMPT_TEXT
 from ..tts_qwen import DEFAULT_MODEL, DEFAULT_VOICE, TTS_MODELS, TtsError, synthesize
 from ..tts_sovits import SovitsError, local_ready, ref_audio_path
 from ..tts_sovits import synthesize as synthesize_local
@@ -39,7 +39,7 @@ def _settings_of(user_id: int) -> dict:
             "SELECT * FROM user_tts_settings WHERE user_id = ?", (user_id,)
         ).fetchone()
     if not row:
-        return {"api_key": "", "model": DEFAULT_MODEL, "prompt_text": ""}
+        return {"api_key": "", "model": DEFAULT_MODEL, "prompt_text": SOVITS_PROMPT_TEXT}
 
     model = (row["model"] or "").strip()
     # 老数据里可能存过 ASR 模型名，这里按默认合成模型处理
@@ -48,7 +48,8 @@ def _settings_of(user_id: int) -> dict:
     return {
         "api_key": row["api_key"] or "",
         "model": model,
-        "prompt_text": row["prompt_text"] or "",
+        # 库里没填就用 config 里写死的默认参考文本
+        "prompt_text": (row["prompt_text"] or "").strip() or SOVITS_PROMPT_TEXT,
     }
 
 
@@ -81,7 +82,8 @@ def put_settings(body: TtsSettingsIn, user: dict = Depends(current_user)):
             f"「{model}」不是语音合成模型，请选择 {TTS_MODELS[0]}",
         )
     new_key = body.api_key.strip()
-    prompt = body.prompt_text.strip()
+    # 参考音频文字固定在 config.py 里，前端不再提供编辑入口
+    prompt = SOVITS_PROMPT_TEXT
 
     with db() as conn:
         exists = conn.execute(
@@ -117,6 +119,8 @@ async def speak(body: SpeakIn, user: dict = Depends(current_user)):
     if not text:
         raise HTTPException(400, "要朗读的文本是空的")
 
+    settings = _settings_of(user["id"])
+
     # 1) 优先用本地的芙宁娜音色（GPT-SoVITS）
     try:
         audio = await synthesize_local(text, settings.get("prompt_text", ""))
@@ -126,7 +130,6 @@ async def speak(body: SpeakIn, user: dict = Depends(current_user)):
             headers={"Cache-Control": "no-store"},
         )
     except SovitsError as local_error:
-        settings = _settings_of(user["id"])
         # 没配云端 Key 就把本地失败的原因直接告诉前端
         if not settings["api_key"]:
             raise HTTPException(503, str(local_error)) from local_error
