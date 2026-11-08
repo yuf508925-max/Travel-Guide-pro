@@ -1,7 +1,7 @@
 # =====================================================================
 # db.py —— SQLite 连接 + 建表
 #   数据库文件：server/app.db（已在 .gitignore 里忽略）
-#   五张表：
+#   六张表：
 #     users          用户（用户名 + 密码哈希）
 #     sessions       登录会话（随机 token → 用户），Session Cookie 里只放 token
 #     user_providers 一个账号可以有多套 Key（提供商），各自带多个可选模型，
@@ -9,6 +9,7 @@
 #     route_searches 行程面板的搜索记录（城市 / 出发地 / 目的地 / 方式），
 #                    每个账号只保留最近 20 条，面板打开时回填最近一条
 #     user_map_settings 高德地图 Key / 安全密钥，一个账号一行
+#     user_tts_settings 语音合成（Qwen-TTS）的 Key / 模型 / 音色，一个账号一行
 # =====================================================================
 
 import sqlite3
@@ -137,5 +138,26 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_route_searches_user ON route_searches(user_id, id DESC)"
         )
+
+        # 语音合成（和芙芙打电话）：Qwen-TTS 的 Key / 模型 / 音色
+        #   prompt_text：本地 GPT-SoVITS 参考音频对应的文字，直接影响音色像不像
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_tts_settings (
+                user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                api_key     TEXT NOT NULL DEFAULT '',
+                model       TEXT NOT NULL DEFAULT 'qwen3-tts-flash',
+                voice       TEXT NOT NULL DEFAULT 'Cherry',
+                prompt_text TEXT NOT NULL DEFAULT '',
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+        tts_columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_tts_settings)")}
+        if "prompt_text" not in tts_columns:
+            conn.execute(
+                "ALTER TABLE user_tts_settings ADD COLUMN prompt_text TEXT NOT NULL DEFAULT ''"
+            )
 
         conn.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')")

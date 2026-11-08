@@ -100,12 +100,69 @@ async function refresh() {
     error.value = err instanceof Error ? err.message : '读取失败'
   }
 
+  await loadTts()
+
   // 地图 Key 和聊天 Key 存在一起，这里顺便读出来
   await loadAmapConfig()
   mapKeyDraft.value = amapKey.value
   mapCodeDraft.value = amapSecurityCode.value
 }
 
+// ---------------- 语音（Qwen-TTS） ----------------
+const ttsKeyDraft = ref('')
+const ttsModel = ref('qwen3-tts-flash')
+const ttsModels = ref<string[]>(['qwen3-tts-flash', 'qwen-tts'])
+const ttsHasKey = ref(false)
+const ttsKeyMasked = ref('')
+const ttsSaving = ref(false)
+const ttsMsg = ref('')
+const ttsPrompt = ref('')
+const ttsLocal = ref<{ url: string; ready: boolean; ref_audio: string } | null>(null)
+
+async function loadTts() {
+  try {
+    const res = await fetch('/api/tts/settings')
+    if (!res.ok) return
+    const data = await res.json()
+    ttsHasKey.value = Boolean(data.has_key)
+    ttsKeyMasked.value = data.key_masked ?? ''
+    ttsModel.value = data.model || 'qwen3-tts-flash'
+    ttsPrompt.value = data.prompt_text || ''
+    if (data.local) ttsLocal.value = data.local
+    if (Array.isArray(data.models) && data.models.length) ttsModels.value = data.models
+  } catch {
+    // 读不到就先按未配置处理
+  }
+}
+
+async function saveTts() {
+  if (blocked.value) return
+  ttsSaving.value = true
+  ttsMsg.value = ''
+  error.value = ''
+  try {
+    const res = await fetch('/api/tts/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: ttsKeyDraft.value.trim(),
+        model: ttsModel.value.trim(),
+        prompt_text: ttsPrompt.value.trim(),
+      }),
+    })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error((data && data.detail) || '保存失败')
+    ttsHasKey.value = Boolean(data.has_key)
+    ttsKeyMasked.value = data.key_masked ?? ''
+    ttsKeyDraft.value = ''
+    ttsMsg.value = '语音 Key 已保存'
+    flash(ttsMsg.value)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '保存失败'
+  } finally {
+    ttsSaving.value = false
+  }
+}
 // ---------------- 高德地图 Key ----------------
 const mapKeyDraft = ref('')
 const mapCodeDraft = ref('')
@@ -361,6 +418,54 @@ function onKeydown(event: KeyboardEvent) {
         <button v-if="hasAny" class="add" type="button" :disabled="blocked" @click="startCreate">
           <span class="add__plus">＋</span> 添加模型提供商
         </button>
+        <!-- 语音（Qwen-TTS）：放在聊天 Key 下面、地图 Key 上面 -->
+        <section class="map-box">
+          <p class="map-box__title">
+            语音（电话）
+            <span class="map-box__tag" :class="{ 'map-box__tag--off': !ttsHasKey }">
+              {{ ttsHasKey ? '已配置' : '未配置' }}
+            </span>
+          </p>
+          <p class="map-box__desc">
+            优先用本地 GPT-SoVITS 的芙宁娜音色；本地服务没起来时，才会退回云端的 Qwen-TTS。
+          </p>
+          <p v-if="ttsLocal" class="tts-local">
+            本地音色：<strong>Furina</strong>
+            · 服务 {{ ttsLocal.url }}
+            · 参考音频{{ ttsLocal.ready ? '已就绪' : '缺失（需要 models/Furina_GPT_SoVITS/ref.wav）' }}
+          </p>
+          <input
+            v-model="ttsKeyDraft"
+            class="menu-input menu-input--wide"
+            type="text"
+            spellcheck="false"
+            :placeholder="ttsHasKey ? `已保存 ${ttsKeyMasked}（留空 = 不修改）` : 'DashScope API Key（sk-…）'"
+          />
+          <label class="tts-field">
+            <span class="tts-field__label">参考音频文字</span>
+            <input
+              v-model="ttsPrompt"
+              class="menu-input menu-input--wide"
+              type="text"
+              spellcheck="false"
+              placeholder="ref.wav 里说的那句话（填了更像本人）"
+            />
+          </label>
+          <label class="tts-field">
+            <span class="tts-field__label">模型</span>
+            <select v-model="ttsModel" class="menu-input tts-select">
+              <option v-for="m in ttsModels" :key="m" :value="m">{{ m }}</option>
+            </select>
+          </label>
+          <button
+            class="menu-save"
+            type="button"
+            :disabled="blocked || ttsSaving"
+            @click="saveTts"
+          >
+            {{ ttsSaving ? '保存中…' : '保存语音 Key' }}
+          </button>
+        </section>
         <!-- 高德地图 Key：和聊天 Key 存在一起，按账号保存 -->
         <section class="map-box">
           <p class="map-box__title">
@@ -838,6 +943,40 @@ function onKeydown(event: KeyboardEvent) {
   align-items: center;
   gap: 8px;
   margin-top: 14px;
+}
+.map-box__tag--off {
+  background: rgba(255, 253, 248, 0.12);
+  color: rgba(255, 253, 248, 0.55);
+}
+.tts-local {
+  margin: 0 0 2px;
+  font-size: 0.66rem;
+  line-height: 1.5;
+  color: rgba(255, 253, 248, 0.62);
+}
+.tts-local strong { color: #9fe8c4; }
+.tts-row {
+  display: flex;
+  gap: 8px;
+}
+.tts-field {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.tts-field__label {
+  font-size: 0.64rem;
+  color: rgba(255, 253, 248, 0.45);
+}
+.tts-select {
+  height: 30px;
+  padding: 0 6px;
+  color-scheme: dark;
+}
+.tts-select option {
+  background: #0b2b2b;
+  color: #fffdf8;
 }
 /* ---- 高德地图 Key 区块 ---- */
 .map-box {

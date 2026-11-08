@@ -49,3 +49,22 @@ __pycache__/
 # SQLite 数据库（用户 / 会话都在里面，绝不提交）
 *.db
 *.sqlite3
+
+# ---- 本地语音服务（体积大，不进 Git）----
+voice-service/.venv-gsv/
+voice-service/ffmpeg-bin/
+voice-service/GPT_SoVITS/pretrained_models/
+voice-service/GPT_SoVITS/text/G2PWModel/
+voice-service/GPT_SoVITS/text/*.zip
+voice-service/GPT_SoVITS/**/__pycache__/
+voice-service/__pycache__/
+*.onnx
+*.pth
+*.ckpt
+*.safetensors
+
+# ---- 音色模型（几百 MB，绝不提交）----
+models/
+
+# 本地预览截图（deliverable，不进仓库）
+preview-*.png

@@ -1,34 +1,40 @@
 <!-- ====================================================================
   VolumeMenu —— 点右上角小喇叭弹出的音量面板
-  以前滑块直接摆在导航条里，太占地方；现在收进这个小窗口。
-  只负责"调数值"，真正的音量由 ChatView 的 applyVolume() 写进 <audio>。
+  两条独立的滑块：
+    · 语音通话（芙芙说话的音量，作用于电话窗口里的 <audio>）
+    · 背景音乐（public 下的 BGM，作用于 ChatView 的 <audio>）
+  两者互不影响，静音只作用于背景音乐。
 ==================================================================== -->
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 
 const props = defineProps<{
-  volume: number
-  muted: boolean
+  bgmVolume: number
+  voiceVolume: number
+  bgmMuted: boolean
+  voiceMuted: boolean
 }>()
 
 const emit = defineEmits<{
-  'update:volume': [value: number]
-  'update:muted': [value: boolean]
+  'update:bgmVolume': [value: number]
+  'update:voiceVolume': [value: number]
+  'update:bgmMuted': [value: boolean]
+  'update:voiceMuted': [value: boolean]
   close: []
 }>()
 
-// 用 computed 当 v-model 的桥：滑块动一下就把新值 emit 给父组件
-const slider = computed({
-  get: () => props.volume,
-  set: (value: number) => emit('update:volume', value),
+const bgmSlider = computed({
+  get: () => props.bgmVolume,
+  set: (value: number) => emit('update:bgmVolume', value),
 })
 
-function toggleMute() {
-  emit('update:muted', !props.muted)
-}
+const voiceSlider = computed({
+  get: () => props.voiceVolume,
+  set: (value: number) => emit('update:voiceVolume', value),
+})
 
-// Esc 关闭，和别的弹窗保持一致
+
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') emit('close')
 }
@@ -44,32 +50,57 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
     <div class="menu-pop" role="dialog" aria-label="音量">
       <div class="menu-head">
         <span class="menu-title">音量</span>
-        <button
-          class="menu-mute"
-          type="button"
-          :class="{ 'menu-mute--on': muted }"
-          @click="toggleMute"
-        >
-          {{ muted ? '取消静音' : '静音' }}
-        </button>
       </div>
 
       <div class="menu-row">
-        <span class="menu-ico" aria-hidden="true">{{ muted ? '🔇' : '🔊' }}</span>
+        <button
+          class="menu-ico menu-ico--btn"
+          type="button"
+          :class="{ 'menu-ico--off': voiceMuted }"
+          :title="voiceMuted ? '点一下打开语音' : '点一下静音语音'"
+          @click="emit('update:voiceMuted', !voiceMuted)"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.61 21 3 13.39 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.24.2 2.45.57 3.57a1 1 0 0 1-.25 1.02l-2.2 2.2z"/></svg>
+        </button>
+        <span class="menu-label">语音</span>
         <input
-          v-model.number="slider"
+          v-model.number="voiceSlider"
           class="menu-slider"
           type="range"
           min="0"
           max="100"
           step="1"
-          :disabled="muted"
-          :aria-label="`音量 ${volume}%`"
+          :disabled="voiceMuted"
+          :aria-label="`语音音量 ${voiceVolume}%`"
         />
-        <span class="menu-value">{{ muted ? '静音' : `${volume}%` }}</span>
+        <span class="menu-value">{{ voiceMuted ? '静音' : `${voiceVolume}%` }}</span>
       </div>
 
-      <p class="menu-hint">现在控制的是背景音乐；以后接上语音通话，同一个数值也管那边的声音。</p>
+      <div class="menu-row">
+        <button
+          class="menu-ico menu-ico--btn"
+          type="button"
+          :class="{ 'menu-ico--off': bgmMuted }"
+          :title="bgmMuted ? '点一下打开音乐' : '点一下静音音乐'"
+          @click="emit('update:bgmMuted', !bgmMuted)"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+        </button>
+        <span class="menu-label">音乐</span>
+        <input
+          v-model.number="bgmSlider"
+          class="menu-slider"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :disabled="bgmMuted"
+          :aria-label="`背景音乐音量 ${bgmVolume}%`"
+        />
+        <span class="menu-value">{{ bgmMuted ? '静音' : `${bgmVolume}%` }}</span>
+      </div>
+
+      <p class="menu-hint">点左边的图标可以单独静音语音或音乐。</p>
     </div>
   </div>
 </template>
@@ -91,7 +122,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 .menu-pop {
   position: relative;
   z-index: 1;
-  width: 260px;
+  width: 268px;
   padding: 12px 14px;
   box-sizing: border-box;
   border: 1.5px solid rgba(255, 253, 248, 0.4);
@@ -118,31 +149,56 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
   font-weight: 500;
   letter-spacing: 0.04em;
 }
-.menu-mute {
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid rgba(255, 253, 248, 0.35);
-  border-radius: 12px;
-  background: transparent;
-  color: rgba(255, 253, 248, 0.85);
-  font-size: 0.76rem;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
-}
-.menu-mute:hover { background: rgba(255, 253, 248, 0.14); }
-.menu-mute--on {
-  background: rgba(255, 253, 248, 0.9);
-  border-color: transparent;
-  color: #2f7d6e;
-}
 
 .menu-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
+  margin-top: 8px;
 }
-.menu-ico { font-size: 0.95rem; }
+.menu-ico {
+  display: grid;
+  place-items: center;
+  font-size: 0.9rem;
+}
+.menu-ico--btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #46c98c;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+.menu-ico--btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.menu-ico--btn:hover { background: rgba(255, 253, 248, 0.14); }
+/* 静音：图标变灰 + 一道斜杠 */
+.menu-ico--btn.menu-ico--off {
+  color: rgba(255, 253, 248, 0.35);
+  position: relative;
+}
+.menu-ico--btn.menu-ico--off::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1.5px;
+  background: #ff8f7a;
+  transform: rotate(-45deg);
+  border-radius: 1px;
+}
+.menu-label {
+  width: 28px;
+  font-size: 0.72rem;
+  color: rgba(255, 253, 248, 0.7);
+}
 
 .menu-slider {
   flex: 1;
@@ -153,15 +209,16 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 .menu-slider:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .menu-value {
-  width: 40px;
+  width: 42px;
   text-align: right;
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   color: rgba(255, 253, 248, 0.8);
+  font-variant-numeric: tabular-nums;
 }
 
 .menu-hint {
   margin: 10px 0 0;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   line-height: 1.5;
   color: rgba(255, 253, 248, 0.45);
 }

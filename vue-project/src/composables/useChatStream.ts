@@ -39,6 +39,11 @@ export function useChatStream(options?: {
   // isTyping：整轮回复是否还没结束（决定输入框能不能用）
   const isTyping = ref(false)
 
+  // holdAi：通话模式下先把文字攒着不显示，等语音准备好再一起放出来
+  const holdAi = ref(false)
+  const heldText = ref('')
+  let heldMessage: Message | null = null
+
   // isThinking：模型是否还在"思考"（推理模型会先思考几秒才吐正文）
   //   true 时前端显示"芙芙正在思考…"，避免开头几秒一片空白
   const isThinking = ref(false)
@@ -55,6 +60,11 @@ export function useChatStream(options?: {
   // 把一段文字排进队列，并启动消费
   function enqueue(text: string, into: Message) {
     if (!text) return
+    if (holdAi.value) {
+      heldMessage = into
+      heldText.value += text
+      return
+    }
     target = into
     for (const ch of text) queue.push(ch)
     startConsumer()
@@ -187,7 +197,7 @@ export function useChatStream(options?: {
         setTimeout(resolve, 120_000)        // 兜底：最多等 2 分钟
       })
 
-      if (!aiMsg.text) aiMsg.text = '（芙芙这次什么也没说…）'
+      if (!aiMsg.text && !holdAi.value) aiMsg.text = '（芙芙这次什么也没说…）'
     } catch (err) {
       // 后端没起 / Key 没配 / 代理写错，都会走到这里
       const reason = err instanceof Error ? err.message : String(err)
@@ -203,5 +213,14 @@ export function useChatStream(options?: {
     }
   }
 
-  return { messages, isTyping, isThinking, thinkingText, sendMessage }
+  /** 把通话期间攒下的整段文字交出去（交给页面去同步朗读和显示） */
+  function takeHeld(): { message: Message; text: string } | null {
+    if (!heldMessage || !heldText.value) return null
+    const payload = { message: heldMessage, text: heldText.value }
+    heldText.value = ''
+    heldMessage = null
+    return payload
+  }
+
+  return { messages, isTyping, isThinking, thinkingText, sendMessage, holdAi, takeHeld }
 }

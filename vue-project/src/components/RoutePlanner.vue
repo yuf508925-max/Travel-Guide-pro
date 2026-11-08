@@ -784,7 +784,7 @@ onBeforeUnmount(() => {
                   title="删除这条记录"
                   @mousedown.prevent="removeSuggestion(item.id)"
                 >
-                  ×
+                  <svg class="suggest__del-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
                 </button>
               </li>
             </ul>
@@ -817,7 +817,7 @@ onBeforeUnmount(() => {
                   title="删除这条记录"
                   @mousedown.prevent="removeSuggestion(item.id)"
                 >
-                  ×
+                  <svg class="suggest__del-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
                 </button>
               </li>
             </ul>
@@ -855,7 +855,7 @@ onBeforeUnmount(() => {
                   title="删除这条记录"
                   @mousedown.prevent="removeSuggestion(item.id)"
                 >
-                  ×
+                  <svg class="suggest__del-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
                 </button>
               </li>
             </ul>
@@ -1156,40 +1156,57 @@ onBeforeUnmount(() => {
 .suggest li {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
+  padding: 1px 2px;
 }
 .suggest button {
-  display: block;
-  width: 100%;
-  padding: 6px 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: rgba(255, 253, 248, 0.85);
-  font-size: 0.78rem;
   font-family: inherit;
-  text-align: left;
   cursor: pointer;
+}
+/* 文字那一侧 */
+.suggest__pick {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 8px;
+  font-size: 0.78rem;
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.suggest button:hover {
+.suggest__pick:hover {
   background: rgba(255, 253, 248, 0.14);
   color: #fffdf8;
 }
-.suggest__pick { flex: 1; min-width: 0; }
+/* 删除按钮：做成 30×30 的方块，整块都能点，符号居中 */
 .suggest__del {
-  flex: 0 0 22px !important;
-  width: 22px !important;
-  padding: 0 !important;
-  text-align: center;
-  color: rgba(255, 138, 122, 0.85) !important;
-  font-size: 0.9rem !important;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: rgba(255, 138, 122, 0.9);
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .suggest__del:hover {
-  background: rgba(255, 138, 122, 0.18) !important;
-  color: #ffd9d0 !important;
+  background: rgba(255, 138, 122, 0.22);
+  color: #ffe3dc;
+}
+/* 用 SVG 画 ×，居中绝对准确，不受字体影响 */
+.suggest__del-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
 }
 
 .route-input--city {

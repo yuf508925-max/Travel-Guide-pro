@@ -16,6 +16,8 @@ import RoutePlanner from '../components/RoutePlanner.vue'
 import { resetAmapConfig } from '../composables/useAmap'
 import VolumeMenu from '../components/VolumeMenu.vue'
 import SettingsMenu from '../components/SettingsMenu.vue'
+import PhoneCall from '../components/PhoneCall.vue'
+import CallPanel from '../components/CallPanel.vue'
 import { useChatStream } from '../composables/useChatStream'
 
 // ------------------------------------------------------------------
@@ -65,7 +67,7 @@ const emit = defineEmits(['logout'])
 
 // 聊天逻辑全部在 useChatStream 里（发消息、假流式回复、消息列表）
 // 界面组件只负责展示，互相之间靠 props 和事件传话
-const { messages, isTyping, isThinking, sendMessage } = useChatStream()
+const { messages, isTyping, isThinking, sendMessage, holdAi, takeHeld } = useChatStream()
 
 // ------------------------------------------------------------------
 // 顶部导航按钮（红框里那三个）
@@ -77,7 +79,7 @@ const navButtons = ref([
   {
     key: 'weather',
     text: '天气',
-    hint: '天气查询 · 即将上线',
+    hint: '天气查询',
     // 太阳：一个圆 + 八条光线（图标直接用 path 画，不依赖图片，选中时跟着变蓝）
     paths: [
       'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8',
@@ -108,7 +110,7 @@ const navButtons = ref([
   {
     key: 'tts',
     text: '和芙芙打电话',
-    hint: '语音通话 · 即将上线',
+    hint: '语音通话',
     // 电话听筒：一条闭环的听筒轮廓（比起话筒更贴合"打电话"这个动作）
     paths: [
       'M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.9.6 2.8.7a2 2 0 0 1 1.7 2Z',
@@ -171,9 +173,41 @@ function toggleMenu(name: 'volume' | 'settings') {
 
 
 
+const showCall = ref(false)
+// 通话模式：正文已收齐但语音还在合成，这期间继续显示思考提示
+const callPending = ref(false)
+// idle = 没在打；prompt = 已弹出"拨出"图标，等你点；active = 通话中
+const callStage = ref<'idle' | 'prompt' | 'active'>('idle')
+const phoneRef = ref<InstanceType<typeof PhoneCall> | null>(null)
+
+function dialCall() {
+  callStage.value = 'active'
+  showCall.value = true
+}
+
+function closeCall() {
+  showCall.value = false
+  callStage.value = 'idle'
+}
+
 function selectNav(index: number) {
   const key = navButtons.value[index]?.key
   openMenu.value = null
+
+  // 电话：先弹出一个"拨出"图标，点那个图标才真正拨号
+  if (key === 'tts') {
+    showWeather.value = false
+    showRoute.value = false
+    if (callStage.value === 'idle') {
+      callStage.value = 'prompt'
+    } else if (callStage.value === 'prompt') {
+      callStage.value = 'idle'
+    } else {
+      phoneRef.value?.toggleMinimize()
+    }
+    activeNav.value = index
+    return
+  }
 
   // 天气：点一下开/关那个小窗口
   if (key === 'weather') {
@@ -208,19 +242,67 @@ function selectNav(index: number) {
 // ------------------------------------------------------------------
 const BGM_SRC = "/Travelers' encore - Andrew Prahlow.mp3"
 
-const volume = ref(50)      // 0~100，默认 80
-const muted = ref(false)    // 静音开关
+const bgmVolume = ref(50)    // 背景音乐 0~100
+const voiceVolume = ref(80)  // 芙芙说话 0~100（电话窗口用）
+const muted = ref(false)     // 背景音乐静音开关，和语音无关
+const voiceMuted = ref(false) // 语音静音开关（电话里的芙芙）
 const audioRef = ref<HTMLAudioElement | null>(null)
 
 // 把音量写进 <audio>：静音时直接给 0，恢复时按滑块数值还原
 function applyVolume() {
   const el = audioRef.value
   if (!el) return
-  el.volume = muted.value ? 0 : Math.min(1, Math.max(0, volume.value / 100))
+  el.volume = muted.value ? 0 : Math.min(1, Math.max(0, bgmVolume.value / 100))
 }
 
 // 滑块拖动 / 静音切换都会触发
-watch([volume, muted], applyVolume)
+watch([bgmVolume, muted], applyVolume)
+
+// ------------------------------------------------------------------
+// 通话模式：文字先攒着，等语音合成好再"边说话边跳字"
+//   holdAi = true 时，useChatStream 不往气泡里写字，而是把整段攒起来；
+//   一轮结束后交给电话窗口一次性合成（一口气说完），
+//   拿到音频时长后按同样节奏把文字放出来。
+// ------------------------------------------------------------------
+watch(showCall, (open) => {
+  holdAi.value = open
+  if (!open) callPending.value = false
+  // 通话中途关掉：把攒下来的文字直接显示，别丢内容
+  if (!open) {
+    const held = takeHeld()
+    if (held) held.message.text = held.text
+  }
+})
+
+function revealText(message: { text: string }, full: string, durationMs: number) {
+  const span = Math.max(900, durationMs || full.length * 180)
+  const start = performance.now()
+  const step = () => {
+    const ratio = Math.min(1, (performance.now() - start) / span)
+    message.text = full.slice(0, Math.floor(full.length * ratio))
+    if (ratio < 1) requestAnimationFrame(step)
+    else message.text = full
+  }
+  requestAnimationFrame(step)
+}
+
+watch(isTyping, async (typing) => {
+  if (typing) {
+    // 通话中：正文还在生成，继续显示思考提示
+    if (showCall.value) callPending.value = true
+    return
+  }
+  if (!showCall.value) return
+  const held = takeHeld()
+  if (!held) return
+
+  const { message, text } = held
+  message.text = ''
+  const duration = (await phoneRef.value?.speakAll(text)) ?? 0
+  // 语音已经开口，撤掉思考提示，文字跟着音频节奏跳出来
+  callPending.value = false
+  revealText(message, text, duration)
+})
 
 
 // 浏览器默认拦截"带声音的自动播放"，被拦时等用户第一次点击页面再试一次
@@ -302,6 +384,13 @@ onBeforeUnmount(() => {
           @close="closeWeather"
           @update:place="saveWeatherPlace"
         />
+
+        <!-- 打电话准备窗口：和天气一样挂在导航条下面 -->
+        <CallPanel
+          v-if="callStage === 'prompt'"
+          @dial="dialCall"
+          @close="callStage = 'idle'"
+        />
       </div>
 
       <div class="chat-user-box">
@@ -316,7 +405,7 @@ onBeforeUnmount(() => {
           <button
             class="tool-btn"
             :class="{ 'tool-btn--on': openMenu === 'volume', 'tool-btn--muted': muted }"
-            :title="muted ? '音量（已静音）' : `音量 ${volume}%`"
+            :title="`音量：语音 ${voiceMuted ? '静音' : voiceVolume + '%'} / 音乐 ${muted ? '静音' : bgmVolume + '%'}`"
             :aria-expanded="openMenu === 'volume'"
             @click="toggleMenu('volume')"
           >
@@ -380,10 +469,14 @@ onBeforeUnmount(() => {
           <!-- 两个小弹窗都挂在工具区里，以它为定位参照 -->
           <VolumeMenu
             v-if="openMenu === 'volume'"
-            :volume="volume"
-            :muted="muted"
-            @update:volume="volume = $event"
-            @update:muted="muted = $event"
+            :bgm-volume="bgmVolume"
+            :voice-volume="voiceMuted ? 0 : voiceVolume"
+            :bgm-muted="muted"
+            :voice-muted="voiceMuted"
+            @update:bgm-volume="bgmVolume = $event"
+            @update:voice-volume="voiceVolume = $event"
+            @update:bgm-muted="muted = $event"
+            @update:voice-muted="voiceMuted = $event"
             @close="openMenu = null"
           />
           <!-- AI 正在回复时锁住设置，避免一轮回复中途换模型 -->
@@ -473,13 +566,23 @@ onBeforeUnmount(() => {
 
       <!-- 红框：聊天面板 = 消息列表 + 输入框，上下拼起来 -->
       <section class="chat-panel">
-        <MessageList :messages="messages" :is-typing="isTyping" :is-thinking="isThinking" />
+        <MessageList
+        :messages="messages"
+        :is-typing="isTyping"
+        :is-thinking="isThinking || callPending"
+      />
         <MessageInput :disabled="isTyping" @send="sendMessage" />
       </section>
     </main>
 
     <!-- 行程面板：填出发地/目的地，用高德地图画路线 -->
     <RoutePlanner v-if="showRoute" @close="showRoute = false" />
+    <PhoneCall
+      v-if="showCall"
+      ref="phoneRef"
+      :voice-volume="voiceMuted ? 0 : voiceVolume"
+      @close="closeCall"
+    />
   </div>
 </template>
 
