@@ -77,16 +77,6 @@ const handleSubmit = async () => {
     <!-- 黄色：视频区 -->
     <figure class="login-pic">
       <div class="login-pic-inner">
-        <!-- <video
-          class="login-video"
-          src="/studio_video_1716732543213.mp4"
-          poster="/45-4544.png"
-          autoplay
-          muted
-          loop
-          playsinline
-          preload="auto">
-        </video> -->
         <video
           class="login-video"
           src="/studio_video_1716732543213.mp4"

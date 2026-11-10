@@ -68,3 +68,6 @@ models/
 
 # 本地预览截图（deliverable，不进仓库）
 preview-*.png
+
+# ---- 加密主密钥（AES 主密钥；丢了库里的 API Key 就解不开，务必单独备份）----
+.keys/

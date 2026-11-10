@@ -1,7 +1,7 @@
 <!-- ====================================================================
   RoutePlanner —— 「行程」面板：填出发地 / 目的地，用高德地图画路线
     · 地图走 高德 JS API 2.0，脚本按需加载（见 composables/useAmap.ts）
-    · 没有 Key 时先显示配置表单（Key 存本地 localStorage）
+    · Key 由后端内置（server/config.py），前端不再需要输入
     · 支持 驾车 / 步行 / 公交 三种方式，查询后自动缩放到整条路线
     · 地址先用 Geocoder 转成经纬度，再交给 Driving/Walking/Transfer 规划
 ==================================================================== -->
@@ -259,8 +259,8 @@ function onDocumentDown(event: PointerEvent) {
   closeSuggest()
 }
 
-// Key 从后端按账号读（存在 user_providers 表里，和聊天 Key 一起）；
-// 没有 Key 时给个提示，让用户去「设置」里填
+// Key 由后端内置（server/config.py），前端只负责读一次；
+// 读不到时显示兜底提示（正常不会发生）
 const needKey = computed(() => !hasAmapKey())
 const configLoading = ref(true)
 
@@ -614,6 +614,11 @@ async function plan() {
   transitOptions.value = []
   trainHint.value = ''
   flightTip.value = null
+  // 动车卡片用 trainQuery 控制显隐：换了出行方式还留着它就会串味
+  // （先查公交出现车次，再切驾车，车次卡片还在）
+  trainQuery.value = null
+  trainFromOptions.value = []
+  trainToOptions.value = []
   trains.value = []
   trainError.value = ''
   trainMeta.value = ''
@@ -702,7 +707,23 @@ async function restoreLastSearch() {
   }
 }
 
-// 在「设置」里填好 Key 之后，如果面板还开着，自动初始化地图并补一次查询
+// 切换出行方式：动车卡片只属于「公交」的结果，切走就立刻收起
+watch(mode, () => {
+  if (trainQuery.value) {
+    trainQuery.value = null
+    trains.value = []
+    trainError.value = ''
+    trainMeta.value = ''
+    trainFromOptions.value = []
+    trainToOptions.value = []
+  }
+  if (mode.value !== 'transit') {
+    trainHint.value = ''
+    flightTip.value = null
+  }
+})
+
+// 配置异步到位之后（首次进面板会读 /api/map），自动初始化地图并补一次查询
 watch(needKey, async (missing: boolean) => {
   if (missing) return
   await nextTick()
@@ -746,11 +767,11 @@ onBeforeUnmount(() => {
 
       <p v-if="configLoading" class="route-loading">读取地图配置…</p>
 
-      <!-- ---- 没配 Key：引导去「设置」里填 ---- -->
+      <!-- ---- 配置没读到的兜底（正常情况下不会出现）---- -->
       <div v-else-if="needKey" class="key-form">
         <p class="key-form__intro">
-          还没有配置高德地图 Key。点右上角的设置按钮，在「高德地图」一栏填入
-          <strong>Web端 (JS API)</strong> 类型的 Key 和安全密钥，保存后回到这里就能用了。
+          地图配置没读到。Key 是固定在后端的（<strong>server/config.py</strong> 的
+          AMAP_JS_KEY），刷新页面再试；如果一直这样，检查后端有没有启动。
         </p>
       </div>
 

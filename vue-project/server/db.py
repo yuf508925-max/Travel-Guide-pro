@@ -17,6 +17,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from . import keyvault
+
 DB_PATH = Path(__file__).parent / "app.db"
 
 
@@ -85,17 +87,6 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_user_providers_user ON user_providers(user_id)"
         )
 
-        # ---- 高德地图配置：单独一张表（一人一行） ----
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_map_settings (
-                user_id       INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-                amap_key      TEXT NOT NULL DEFAULT '',
-                security_code TEXT NOT NULL DEFAULT '',
-                updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
 
         # ---- 迁移：如果 user_providers 上还挂着 amap_* 列（上一版），搬过来再删列 ----
         provider_columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_providers)")}
@@ -161,3 +152,7 @@ def init_db() -> None:
             )
 
         conn.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')")
+
+        # ---- Key 落盘加密：把历史明文逐条转成密文（幂等，已加密的跳过） ----
+        #   库被拷走时只有密文；主密钥在 .keys/master.key（不进 Git）
+        keyvault.migrate_plaintext(conn)

@@ -18,6 +18,7 @@ from datetime import datetime
 
 from ..balance_check import fetch_balance
 from ..db import db
+from .. import keyvault
 from ..llm_settings import DEFAULTS, active_provider, list_providers, provider_to_dict, split_models
 from ..provider_check import verify_credentials
 from .auth import current_user
@@ -48,7 +49,8 @@ def _clean(body: ProviderIn, existing: dict | None = None) -> dict:
     if raw_key:
         api_key = raw_key
     elif existing is not None:
-        api_key = existing.get("api_key") or ""
+        # 库里存的是密文，复用旧 Key 时要先解出来再走后面的校验
+        api_key = keyvault.decrypt_text(existing.get("api_key"))
     else:
         api_key = ""
 
@@ -127,7 +129,7 @@ async def get_balance(
         return cached[1]
 
     result = await fetch_balance(
-        provider.get("api_key") or "",
+        keyvault.decrypt_text(provider.get("api_key") or ""),
         (provider.get("base_url") or "").strip() or DEFAULTS["base_url"],
     )
     result["provider"] = provider.get("name") or "DeepSeek"
@@ -181,7 +183,7 @@ async def create_provider(body: ProviderIn, user: dict = Depends(current_user)):
             (
                 user["id"],
                 clean["name"],
-                clean["api_key"],
+                keyvault.encrypt_text(clean["api_key"]),
                 clean["base_url"],
                 clean["models"],
                 clean["model"],
@@ -214,7 +216,7 @@ async def update_provider(provider_id: int, body: ProviderIn, user: dict = Depen
             """,
             (
                 clean["name"],
-                clean["api_key"],
+                keyvault.encrypt_text(clean["api_key"]),
                 clean["base_url"],
                 clean["models"],
                 clean["model"],

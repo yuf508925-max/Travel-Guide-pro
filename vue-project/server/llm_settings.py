@@ -11,6 +11,7 @@
 
 from fastapi import Request
 
+from . import keyvault
 from .config import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 from .db import db
 from .routers.auth import optional_user
@@ -39,17 +40,19 @@ def split_models(raw: str) -> list[str]:
 
 
 def provider_to_dict(row) -> dict:
-    """数据库行 → 前端友好的结构（Key 打码）"""
+    """数据库行 → 前端友好的结构（Key 解密后打码，原文不出后端）"""
     models = split_models(row["models"])
     selected = (row["model"] or "").strip()
     # 老数据可能只有 model 没有 models，这里补齐，界面上下拉才有选项
     if selected and selected not in models:
         models.insert(0, selected)
+    plain_key = keyvault.decrypt_text(row["api_key"])
     return {
         "id": row["id"],
         "name": row["name"] or "DeepSeek",
-        "api_key_masked": mask_key(row["api_key"] or ""),
-        "has_api_key": bool(row["api_key"]),
+        "api_key_masked": mask_key(plain_key),
+        "has_api_key": bool(plain_key),
+        "key_fingerprint": keyvault.fingerprint(plain_key),
         "base_url": row["base_url"] or "",
         "models": models,
         "model": selected or (models[0] if models else ""),
@@ -86,7 +89,7 @@ def resolve_llm(request: Request) -> dict:
     user = optional_user(request)
     row = active_provider(user["id"]) if user else None
 
-    api_key = ((row or {}).get("api_key") or "").strip()
+    api_key = keyvault.decrypt_text((row or {}).get("api_key")).strip()
     base_url = ((row or {}).get("base_url") or "").strip() or DEFAULTS["base_url"]
 
     # 模型：先看选中的，再看列表第一个，最后用内置默认

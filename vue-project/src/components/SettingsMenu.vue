@@ -21,7 +21,6 @@ import {
   updateProvider,
 } from '../composables/useProviders'
 import type { Provider } from '../composables/useProviders'
-import { amapKey, amapSecurityCode, loadAmapConfig, saveAmapConfig } from '../composables/useAmap'
 
 const props = withDefaults(
   defineProps<{
@@ -101,11 +100,6 @@ async function refresh() {
   }
 
   await loadTts()
-
-  // 地图 Key 和聊天 Key 存在一起，这里顺便读出来
-  await loadAmapConfig()
-  mapKeyDraft.value = amapKey.value
-  mapCodeDraft.value = amapSecurityCode.value
 }
 
 // ---------------- 语音（Qwen-TTS） ----------------
@@ -160,28 +154,6 @@ async function saveTts() {
     ttsSaving.value = false
   }
 }
-// ---------------- 高德地图 Key ----------------
-const mapKeyDraft = ref('')
-const mapCodeDraft = ref('')
-const mapSaving = ref(false)
-const mapMsg = ref('')
-
-async function saveMap() {
-  if (blocked.value) return
-  mapSaving.value = true
-  mapMsg.value = ''
-  error.value = ''
-  try {
-    await saveAmapConfig(mapKeyDraft.value, mapCodeDraft.value)
-    mapMsg.value = '地图 Key 已保存'
-    flash(mapMsg.value)
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : '保存地图 Key 失败'
-  } finally {
-    mapSaving.value = false
-  }
-}
-
 // ---------------- 表单 ----------------
 function startCreate() {
   if (blocked.value) return
@@ -415,7 +387,7 @@ function onKeydown(event: KeyboardEvent) {
         <button v-if="hasAny" class="add" type="button" :disabled="blocked" @click="startCreate">
           <span class="add__plus">＋</span> 添加模型提供商
         </button>
-        <!-- 语音（Qwen-TTS）：放在聊天 Key 下面、地图 Key 上面 -->
+        <!-- 语音（Qwen-TTS）：放在聊天 Key 下面 -->
         <section class="map-box">
           <p class="map-box__title">
             语音（电话）
@@ -453,40 +425,7 @@ function onKeydown(event: KeyboardEvent) {
             {{ ttsSaving ? '保存中…' : '保存语音 Key' }}
           </button>
         </section>
-        <!-- 高德地图 Key：和聊天 Key 存在一起，按账号保存 -->
-        <section class="map-box">
-          <p class="map-box__title">
-            高德地图
-            <span class="map-box__tag">行程用</span>
-          </p>
-          <p class="map-box__desc">
-            和高德 JS API 的 Key 一样按账号保存，「行程」里的路线地图会用它。
-          </p>
-          <input
-            v-model="mapKeyDraft"
-            class="menu-input menu-input--wide"
-            type="text"
-            spellcheck="false"
-            placeholder="Web端 (JS API) Key"
-          />
-          <input
-            v-model="mapCodeDraft"
-            class="menu-input menu-input--wide"
-            type="text"
-            spellcheck="false"
-            placeholder="安全密钥 jscode（可留空）"
-          />
-          <button
-            class="menu-save"
-            type="button"
-            :disabled="blocked || mapSaving"
-            @click="saveMap"
-          >
-            {{ mapSaving ? '保存中…' : '保存地图 Key' }}
-          </button>
-        </section>
-
-        <p v-if="success" class="success-hint">✅ {{ success }}</p>
+                <p v-if="success" class="success-hint">✅ {{ success }}</p>
         <p v-if="tip" class="menu-tip">{{ tip }}</p>
         <p v-if="error" class="menu-error">{{ error }}</p>
 

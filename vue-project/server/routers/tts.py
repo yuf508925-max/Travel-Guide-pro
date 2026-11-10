@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from .. import keyvault
 from ..db import db
 from ..llm_settings import mask_key
 from ..config import SOVITS_API_URL, SOVITS_PROMPT_TEXT
@@ -46,7 +47,7 @@ def _settings_of(user_id: int) -> dict:
     if model not in TTS_MODELS:
         model = DEFAULT_MODEL
     return {
-        "api_key": row["api_key"] or "",
+        "api_key": keyvault.decrypt_text(row["api_key"]),
         "model": model,
         # 库里没填就用 config 里写死的默认参考文本
         "prompt_text": (row["prompt_text"] or "").strip() or SOVITS_PROMPT_TEXT,
@@ -90,7 +91,11 @@ def put_settings(body: TtsSettingsIn, user: dict = Depends(current_user)):
             "SELECT api_key FROM user_tts_settings WHERE user_id = ?", (user["id"],)
         ).fetchone()
         # 留空表示"不改 Key"，只改模型/音色
-        key = new_key or (exists["api_key"] if exists else "")
+        # exists 里存的是密文，直接沿用；重新输入的新 Key 加密后再落库
+        if new_key:
+            key = keyvault.encrypt_text(new_key)
+        else:
+            key = exists["api_key"] if exists else ""
 
         conn.execute(
             """
@@ -108,7 +113,8 @@ def put_settings(body: TtsSettingsIn, user: dict = Depends(current_user)):
     return {
         "ok": True,
         "has_key": bool(key),
-        "key_masked": mask_key(key) if key else "",
+        # key 此时可能是密文，展示前先解回明文再打码
+        "key_masked": mask_key(keyvault.decrypt_text(key)) if key else "",
         "prompt_text": prompt,
     }
 
