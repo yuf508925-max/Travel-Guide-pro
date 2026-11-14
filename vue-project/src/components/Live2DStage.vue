@@ -7,7 +7,7 @@
 ==================================================================== -->
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import * as PIXI from 'pixi.js'
 // 从 /cubism4 子路径导入：只引入 Cubism 4 的内核支持，打包体积更小
 // Cubism 4 内核向下兼容 Cubism 3 模型，市面上绝大多数模型都能跑
@@ -27,8 +27,11 @@ const props = withDefaults(
     // 模型文件路径。把模型整个文件夹丢进 public/live2d/ 下面，
     // 然后把这个路径指到里面的 xxx.model3.json 就能换人
     modelUrl?: string
+    // 眼睛要不要跟着鼠标转。AI 控制模式下传 false：
+    // 否则她一边按 AI 挑的表情演，一边眼珠还在追鼠标，很出戏
+    followMouse?: boolean
   }>(),
-  { modelUrl: '/live2d/index.model3.json' }
+  { modelUrl: '/live2d/index.model3.json', followMouse: true }
 )
 
 const stageRef = ref<HTMLElement | null>(null)      // 外层容器 div，用来量尺寸
@@ -100,6 +103,29 @@ function fixClippingMaskBuffer(target: Live2DModel) {
 }
 
 // ------------------------------------------------------------------
+// applyFollowMouse：眼睛到底跟不跟鼠标
+// ------------------------------------------------------------------
+// 库里的 Automator 在 autoFocus=true 时会监听 globalpointermove，
+// 把指针位置换算成焦点喂给 FocusController（cubism4.js 里那个 automator）。
+// 关掉之后焦点不会自己动，得手动拨回 (0,0)，否则眼珠会停在最后一次鼠标的位置。
+function applyFollowMouse() {
+  const automator = (model as unknown as { automator?: { autoFocus: boolean } } | null)?.automator
+  if (automator) automator.autoFocus = props.followMouse
+
+  if (!props.followMouse) {
+    const focusController = (
+      model?.internalModel as unknown as {
+        focusController?: { focus(x: number, y: number, instant?: boolean): void }
+      }
+    )?.focusController
+    focusController?.focus(0, 0, true)
+  }
+}
+
+// 父组件切换 AI 控制模式时同步过来（模型还没加载完也没关系，加载完会再调一次）
+watch(() => props.followMouse, applyFollowMouse)
+
+// ------------------------------------------------------------------
 // 组件挂载后：建舞台 + 加载模型
 // ------------------------------------------------------------------
 onMounted(async () => {
@@ -125,6 +151,7 @@ onMounted(async () => {
     fixClippingMaskBuffer(model)   // 遮罩过多的模型必须先修，否则后面画不出来
     app.stage.addChild(model)
     layoutModel()
+    applyFollowMouse()   // 建好就按当前设置决定眼睛跟不跟鼠标
     status.value = 'ready'
 
     // ===== 互动：点模型不同部位触发不同动作 =====
@@ -175,7 +202,19 @@ interface CubismCoreModel {
 interface MotionManagerLike {
   state?: { currentGroup?: string; currentIndex?: number }
   stopAllMotions(): void
-  expressionManager?: { resetExpression(): void }
+  expressionManager?: ExpressionManagerLike
+}
+
+// 表情管理器：setExpression 里有一条「和当前表情同名就直接 return false」的短路，
+// 但我们切动作时会把表情复位掉，这时再挑同一个表情就什么都不会发生
+// ——表现为「只有第一个表情生效，后面挑同一个就没反应」。所以这里把 currentExpression 清掉。
+interface ExpressionManagerLike {
+  resetExpression(): void
+  currentExpression?: unknown
+}
+
+function getExpressionManager(): ExpressionManagerLike | undefined {
+  return getMotionManager()?.expressionManager
 }
 
 function getMotionManager(): MotionManagerLike | undefined {
@@ -220,6 +259,10 @@ const MOTION_PRIORITY_FORCE = 3
 defineExpose({
   // 切表情：name 例如 '呆毛电风扇' / '哭'（模型里有哪些表情看 model3.json）
   setExpression(name: string) {
+    const em = getExpressionManager()
+    // 先清掉「当前表情」标记：库里 setExpression 发现跟当前表情同名会直接不播，
+    // 而 resetToIdle 已经把表情复位了，这时挑回同一个表情就会静默失败
+    if (em) em.currentExpression = undefined
     model?.expression(name)
   },
   // 播动作：group 例如 'Idle' / 'TapBody'，index 是第几个动作。

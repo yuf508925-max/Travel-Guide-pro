@@ -102,4 +102,9 @@ def resolve_llm(request: Request) -> dict:
         "api_key": api_key or None,
         "base_url": base_url,
         "model": model or DEFAULTS["model"],
+        # 打点用：哪个 Key 的哪一档模型
+        "provider_id": (row or {}).get("id"),
+        "provider_name": (row or {}).get("name") or "",
+        # 当前登录账号（对话记忆按它归属）
+        "user_id": (user or {}).get("id"),
     }

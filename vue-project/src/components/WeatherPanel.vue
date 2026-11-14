@@ -8,6 +8,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import SearchBar from './SearchBar.vue'
+import { saveSearchHistory } from '../composables/useRouteHistory'
 
 // ------------------------------------------------------------------
 // 后端返回的数据结构（只挑前端要用的字段声明）
@@ -26,6 +28,8 @@ interface WeatherData {
   city: string
   region: string
   updated_at: string
+  // 实际用的数据源：open-meteo / met.no / wttr.in（后端兜底时会变）
+  source?: string
   current: {
     temp: number | null
     desc: string
@@ -50,6 +54,13 @@ const emit = defineEmits<{
   // 查询成功后把（省, 市）回传给父组件保存，下次打开还是这里
   'update:place': [province: string, city: string]
 }>()
+
+// 数据源名字，底部那行照实说明用的是哪个
+const SOURCES: Record<string, string> = {
+  'open-meteo': 'Open-Meteo',
+  'met.no': '挪威气象局 MET Norway',
+  'wttr.in': 'wttr.in',
+}
 
 // 天气图标：后端只给 key（sunny / rain / snow…），这里翻成 emoji。
 // 用 emoji 是为了不额外引入图标库，系统自带彩色字形，一眼能认。
@@ -78,6 +89,12 @@ const loading = ref(false)
 const error = ref('')
 
 const canSearch = computed(() => !loading.value && city.value.trim().length > 0)
+
+// 兜底换源时底部要照实写是哪个源，别一直显示 Open-Meteo
+const sourceLabel = computed(() => {
+  const key = data.value?.source ?? ''
+  return SOURCES[key] ?? (key || 'Open-Meteo')
+})
 
 async function load() {
   const cityName = city.value.trim()
@@ -114,6 +131,8 @@ async function load() {
 
 function search() {
   if (!canSearch.value) return
+  // 查过一次就记进历史（和行程 / vlog 共用一张表，kind=weather）
+  void saveSearchHistory('weather', city.value)
   load()
 }
 
@@ -160,13 +179,16 @@ function shortTime(iso: string): string {
             placeholder="省"
             aria-label="省份"
           />
-          <input
+          <!-- 城市这一格换成公共搜索框：点一下能选以前查过的城市（kind=weather） -->
+          <SearchBar
             v-model="city"
-            class="weather-input weather-input--city"
-            type="text"
-            maxlength="20"
+            class="weather-city-bar"
+            kind="weather"
+            :maxlength="20"
+            :limit="6"
             placeholder="市"
-            aria-label="城市"
+            title="点一下可以选以前查过的城市"
+            @search="search"
           />
           <button class="weather-go" type="submit" :disabled="!canSearch">查询</button>
         </form>
@@ -227,7 +249,7 @@ function shortTime(iso: string): string {
         </ul>
 
         <p class="weather-foot">
-          数据来源 Open-Meteo · 更新于 {{ shortTime(data.updated_at) }} · 10 分钟内不重复请求
+          数据来源 {{ sourceLabel }} · 更新于 {{ shortTime(data.updated_at) }} · 10 分钟内不重复请求
         </p>
       </template>
     </div>
@@ -302,7 +324,10 @@ function shortTime(iso: string): string {
   transition: border-color 0.2s, width 0.2s;
 }
 .weather-input--province { width: 74px; }
-.weather-input--city { width: 86px; }
+/* 城市那一格是公共 SearchBar，高度/圆角跟旁边的省输入框对齐 */
+.weather-city-bar { width: 96px; flex: none; }
+.weather-city-bar :deep(.search-bar__field) { height: 30px; border-radius: 15px; }
+.weather-city-bar :deep(.search-bar__input) { font-size: 0.84rem; }
 .weather-input::placeholder { color: rgba(255, 253, 248, 0.45); }
 .weather-input:focus { border-color: rgba(255, 253, 248, 0.8); }
 
@@ -459,7 +484,7 @@ function shortTime(iso: string): string {
 @media (max-width: 640px) {
   .weather-pop { padding: 12px; }
   .weather-input--province { width: 58px; }
-  .weather-input--city { width: 66px; }
+  .weather-city-bar { width: 78px; }
   .weather-days {
     display: flex;
     overflow-x: auto;

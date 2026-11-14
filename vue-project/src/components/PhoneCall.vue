@@ -376,7 +376,8 @@ function hangUp() {
   emit('close')
 }
 
-defineExpose({ speak, speakAll, stopAudio, toggleMinimize })
+// getAudio：把正在播的那个 <audio> 交给口型同步用（见 composables/useLipSync.ts）
+defineExpose({ speak, speakAll, stopAudio, toggleMinimize, getAudio: () => audio })
 
 onMounted(async () => {
   placeBottomRight()

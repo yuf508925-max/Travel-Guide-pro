@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from .. import music_store
 from ..db import db
 from ..security import hash_password, verify_password
 
@@ -87,14 +88,14 @@ def register(body: RegisterIn, response: Response):
 
     # 注册完直接登录
     _set_session_cookie(response, token)
-    return {"username": username}
+    return {"username": username, "role": "user"}
 
 
 @router.post("/login")
 def login(body: LoginIn, response: Response):
     with db() as conn:
         row = conn.execute(
-            "SELECT id, username, password_hash FROM users WHERE username = ?",
+            "SELECT id, username, password_hash, role FROM users WHERE username = ?",
             (body.username.strip(),),
         ).fetchone()
 
@@ -105,7 +106,7 @@ def login(body: LoginIn, response: Response):
         token = _create_session(conn, row["id"])
 
     _set_session_cookie(response, token)
-    return {"username": row["username"]}
+    return {"username": row["username"], "role": row["role"]}
 
 
 @router.get("/me")
@@ -118,7 +119,7 @@ def me(request: Request):
     with db() as conn:
         row = conn.execute(
             """
-            SELECT u.username
+            SELECT u.username, u.role
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > datetime('now')
@@ -128,7 +129,7 @@ def me(request: Request):
 
     if not row:
         raise HTTPException(401, "登录已过期")
-    return {"username": row["username"]}
+    return {"username": row["username"], "role": row["role"]}
 
 
 @router.post("/logout")
@@ -137,6 +138,11 @@ def logout(request: Request, response: Response):
     if token:
         with db() as conn:
             conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            # 退出登录 → 这次登录上传的音乐（库里的行 + server/tmp_music/<token>/）一起清掉
+            try:
+                music_store.purge_session(conn, token)
+            except Exception:
+                pass        # 清理失败不影响退出登录
 
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
@@ -156,7 +162,7 @@ def optional_user(request: Request) -> dict | None:
     with db() as conn:
         row = conn.execute(
             """
-            SELECT u.id, u.username
+            SELECT u.id, u.username, u.role
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > datetime('now')
@@ -166,7 +172,7 @@ def optional_user(request: Request) -> dict | None:
 
     if not row:
         return None
-    return {"id": row["id"], "username": row["username"]}
+    return {"id": row["id"], "username": row["username"], "role": row["role"]}
 
 
 def current_user(request: Request) -> dict:

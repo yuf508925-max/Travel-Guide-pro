@@ -43,3 +43,9 @@ SOVITS_PROMPT_TEXT = "富有的、贫穷的，带着酒杯或一无所有的子�
 SOVITS_USE_PROMPT_TEXT = True
 SOVITS_TEXT_LANG = "zh"
 SOVITS_PROMPT_LANG = "zh"
+
+# ---- 内置管理员（后台管理页用） ----
+# 首次启动时若库里没有这个账号会自动创建；已存在则只校正角色/密码，不会重复插入。
+# 想换账号改这里就行（改完重启后端）。
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "123456"

@@ -18,6 +18,16 @@ import urllib.request
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
+# 备用数据源。部分网络下 api.open-meteo.com 的 443 端口能连上却一直不回数据
+# （地理编码那个域名是通的，只有 forecast 卡死），所以再加一个 wttr.in 兜底：
+# 它同样免 Key，给 3 天预报，字段够用。
+WTTR_URL = "https://wttr.in/{lat},{lon}"
+
+# 第二备源：挪威气象局 MET Norway 的 locationforecast（同样免 Key，
+# 但能一次给到 9~10 天，正好补上 wttr.in 只有 3 天的短板）。
+# 它的 symbol_code 是英文枚举，下面有张表翻成和主源一样的中文 + 图标。
+METNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+
 # 请求超时（秒）。外面的 AP 卡住时别让前端干等
 TIMEOUT = 8.0
 
@@ -478,9 +488,28 @@ async def geocode(city: str, province: str = "") -> tuple[str, float, float, str
 
 
 async def get_weather(city: str, province: str = "", days: int = 7) -> dict:
-    """查天气：返回当前天气 + 未来 days 天的预报（已整理成前端好用的结构）"""
-    label, lat, lon, region = await geocode(city, province)
+    """查天气：返回当前天气 + 未来 days 天的预报（已整理成前端好用的结构）
 
+    三个源按顺序试，谁通用谁：
+      1. Open-Meteo   字段最全，7 天随便要（部分网络下 443 能连却不回数据）
+      2. MET Norway   免 Key，能到 9~10 天，没有降水概率（按天气现象估一个）
+      3. wttr.in      最后的兜底，只有 3 天
+    全挂才抛 WeatherUnavailable，错误信息用主源那句，便于判断。
+    """
+    label, lat, lon, region = await geocode(city, province)
+    try:
+        return await _from_open_meteo(label, lat, lon, region, days)
+    except WeatherUnavailable as primary:
+        for fallback in (_from_metno, _from_wttr):
+            try:
+                return await fallback(label, lat, lon, region, days)
+            except WeatherUnavailable:
+                continue
+        raise primary
+
+
+async def _from_open_meteo(label: str, lat: float, lon: float, region: str, days: int) -> dict:
+    """主源：Open-Meteo 预报接口（数据最全，WMO 天气代码能翻成中文）"""
     data = await _get_json(
         FORECAST_URL,
         {
@@ -541,6 +570,7 @@ async def get_weather(city: str, province: str = "", days: int = 7) -> dict:
         "longitude": lon,
         "timezone": data.get("timezone"),
         "updated_at": dt.datetime.now().isoformat(timespec="minutes"),
+        "source": "open-meteo",
         "current": {
             "temp": _round(current.get("temperature_2m")),
             "desc": cur_desc,
@@ -550,6 +580,287 @@ async def get_weather(city: str, province: str = "", days: int = 7) -> dict:
         },
         "days": forecast,
     }
+
+
+# MET Norway 的 symbol_code → (中文, 前端图标 key, 降水概率估计)
+#   它的 code 带 _day / _night / _polartwilight 后缀，取后缀前的部分查表
+_MET_SYMBOLS: dict[str, tuple[str, str, int]] = {
+    "clearsky": ("晴", "sunny", 0),
+    "fair": ("晴间多云", "partly", 5),
+    "partlycloudy": ("多云", "partly", 10),
+    "cloudy": ("阴", "cloudy", 15),
+    "fog": ("雾", "fog", 20),
+    "lightrainshowers": ("小阵雨", "drizzle", 45),
+    "rainshowers": ("阵雨", "rain", 65),
+    "heavyrainshowers": ("强阵雨", "rain", 85),
+    "lightrain": ("小雨", "drizzle", 55),
+    "rain": ("中雨", "rain", 75),
+    "heavyrain": ("大雨", "rain", 92),
+    "lightrainshowersandthunder": ("雷阵雨", "thunder", 70),
+    "rainshowersandthunder": ("雷阵雨", "thunder", 85),
+    "heavyrainandthunder": ("强雷雨", "thunder", 95),
+    "lightrainandthunder": ("雷阵雨", "thunder", 70),
+    "rainandthunder": ("雷雨", "thunder", 90),
+    "lightsleet": ("小雨夹雪", "rain", 60),
+    "sleet": ("雨夹雪", "rain", 70),
+    "heavysleet": ("强雨夹雪", "rain", 85),
+    "lightsnow": ("小雪", "snow", 60),
+    "snow": ("中雪", "snow", 75),
+    "heavysnow": ("大雪", "snow", 90),
+    "lightsnowshowers": ("小阵雪", "snow", 55),
+    "snowshowers": ("阵雪", "snow", 70),
+    "heavysnowshowers": ("强阵雪", "snow", 85),
+    "lightsleetandthunder": ("雷夹雪", "thunder", 70),
+    "sleetandthunder": ("雷夹雪", "thunder", 85),
+    "lightsnowandthunder": ("雷雪", "thunder", 70),
+    "snowandthunder": ("雷雪", "thunder", 85),
+    "snowshowersandthunder": ("雷阵雪", "thunder", 80),
+}
+
+# 中国时区：MET 给的是 UTC，按 +8 归到「哪一天」
+_CST = dt.timezone(dt.timedelta(hours=8))
+
+
+def _met_symbol(code: str) -> tuple[str, str, int]:
+    """MET 的天气代码 → 和主源一致的中文描述 + 图标 + 降水概率"""
+    base = (code or "").split("_")[0]
+    hit = _MET_SYMBOLS.get(base)
+    if hit:
+        return hit
+    lowered = base.lower()
+    if "thunder" in lowered:
+        return ("雷阵雨", "thunder", 80)
+    if "snow" in lowered or "sleet" in lowered:
+        return ("雪", "snow", 70)
+    if "rain" in lowered or "shower" in lowered:
+        return ("雨", "rain", 70)
+    if "drizzle" in lowered:
+        return ("毛毛雨", "drizzle", 55)
+    if "fog" in lowered:
+        return ("雾", "fog", 20)
+    if "cloud" in lowered:
+        return ("多云", "cloudy", 15)
+    if "clear" in lowered:
+        return ("晴", "sunny", 0)
+    if "fair" in lowered:
+        return ("晴间多云", "partly", 5)
+    return ("多云", "cloudy", 15)
+
+
+def _met_local(raw) -> dt.datetime | None:
+    """MET 的 ISO 时间（UTC，带 Z）→ 北京时间"""
+    try:
+        return dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone(_CST)
+    except ValueError:
+        return None
+
+
+async def _from_metno(label: str, lat: float, lon: float, region: str, days: int) -> dict:
+    """第二备源：挪威气象局 MET Norway（免 Key，能一次给到 9~10 天）
+
+    wttr.in 只有 3 天，主源在这台机器上又连不上（443 通但不回数据），
+    所以中间加这一层，把「只显示 3 天」补成 7 天。
+    它的 compact 版没有降水概率字段，按降水当天的累计量把概率估一下。
+    """
+    data = await _get_json(METNO_URL, {"lat": round(lat, 3), "lon": round(lon, 3)})
+    series = ((data or {}).get("properties") or {}).get("timeseries") or []
+    if not series:
+        raise WeatherUnavailable("天气服务没返回预报数据")
+
+    buckets: dict[dt.date, dict] = {}
+    for entry in series:
+        local = _met_local(entry.get("time"))
+        if local is None:
+            continue
+        payload = entry.get("data") or {}
+        details = (payload.get("instant") or {}).get("details") or {}
+        bucket = buckets.setdefault(local.date(), {"temps": [], "winds": [], "hours": {}, "precip": 0.0})
+        temp = details.get("air_temperature")
+        if isinstance(temp, (int, float)):
+            bucket["temps"].append(float(temp))
+        wind = details.get("wind_speed")
+        if isinstance(wind, (int, float)):
+            bucket["winds"].append(float(wind))
+        bucket["hours"][local.hour] = (payload, details)
+        amount = ((payload.get("next_1_hours") or {}).get("details") or {}).get("precipitation_amount")
+        if isinstance(amount, (int, float)):
+            bucket["precip"] += float(amount)
+
+    today = dt.date.today()
+    forecast: list[dict] = []
+    for date_obj in sorted(buckets)[: max(1, days)]:
+        bucket = buckets[date_obj]
+        noon = bucket["hours"].get(12) or bucket["hours"].get(13) or next(iter(bucket["hours"].values()))
+        payload, details = noon
+        code = (
+            ((payload.get("next_1_hours") or {}).get("summary") or {}).get("symbol_code")
+            or ((payload.get("next_6_hours") or {}).get("summary") or {}).get("symbol_code")
+            or ""
+        )
+        desc, icon, rain_prob = _met_symbol(str(code))
+
+        # 当天累计降水越多，雨的概率越不可能低（compact 版没 probability 字段）
+        if bucket["precip"] >= 5:
+            rain_prob = max(rain_prob, 85)
+        elif bucket["precip"] >= 1:
+            rain_prob = max(rain_prob, 70)
+        elif bucket["precip"] >= 0.2:
+            rain_prob = max(rain_prob, 55)
+
+        temps = bucket["temps"]
+        winds = bucket["winds"]
+        forecast.append(
+            {
+                "date": date_obj.isoformat(),
+                "weekday": "今天" if date_obj == today else WEEKDAYS[date_obj.weekday()],
+                "code": None,
+                "desc": desc,
+                "icon": icon,
+                "temp_max": int(round(max(temps))) if temps else None,
+                "temp_min": int(round(min(temps))) if temps else None,
+                "rain_prob": rain_prob,
+                "wind_max": int(round(max(winds))) if winds else None,
+            }
+        )
+
+    if not forecast:
+        raise WeatherUnavailable("天气服务没返回预报数据")
+
+    # 实况：挑时间上离现在最近的一条
+    now = dt.datetime.now(_CST)
+    stamped = [(e, _met_local(e.get("time"))) for e in series]
+    stamped = [(e, when) for e, when in stamped if when is not None]
+    if not stamped:
+        raise WeatherUnavailable("天气服务没返回预报数据")
+    nearest, _ = min(stamped, key=lambda pair: abs((pair[1] - now).total_seconds()))
+    cur_payload = nearest.get("data") or {}
+    cur_details = (cur_payload.get("instant") or {}).get("details") or {}
+    cur_symbol = ((cur_payload.get("next_1_hours") or {}).get("summary") or {}).get("symbol_code") or ""
+    cur_desc, cur_icon, _ = _met_symbol(str(cur_symbol))
+
+    return {
+        "city": label,
+        "region": region,
+        "latitude": lat,
+        "longitude": lon,
+        "timezone": "Asia/Shanghai",
+        "updated_at": dt.datetime.now().isoformat(timespec="minutes"),
+        "source": "met.no",
+        "current": {
+            "temp": int(round(float(cur_details.get("air_temperature") or 0))),
+            "desc": cur_desc,
+            "icon": cur_icon,
+            "wind": int(round(float(cur_details.get("wind_speed") or 0))),
+            "humidity": _as_int(cur_details.get("relative_humidity")),
+        },
+        "days": forecast,
+    }
+
+async def _from_wttr(label: str, lat: float, lon: float, region: str, days: int) -> dict:
+    """备源：wttr.in 的 JSON（j1）。它没 Key、给 3 天，字段和主源对齐"""
+    data = await _get_json(WTTR_URL.format(lat=round(lat, 3), lon=round(lon, 3)), {"format": "j1"})
+
+    conditions = data.get("current_condition") or []
+    weather_days = data.get("weather") or []
+    if not conditions or not weather_days:
+        raise WeatherUnavailable("天气服务没返回预报数据")
+
+    def day_icon(day: dict) -> tuple[str, int | None]:
+        """从 3 小时的逐时段里挑中午那一段，当作当天的代表天气"""
+        hours = day.get("hourly") or []
+        noon = next((h for h in hours if str(h.get("time")) == "1200"), None)
+        if noon is None and hours:
+            noon = hours[min(len(hours) - 1, 4)]
+        noon = noon or {}
+        desc = ((noon.get("weatherDesc") or [{}])[0] or {}).get("value") or ""
+        return desc, _as_int(noon.get("chanceofrain"))
+
+    today = dt.date.today()
+    forecast: list[dict] = []
+    for day in weather_days[: max(1, min(3, days))]:
+        date_str = str(day.get("date") or "")
+        desc, rain_prob = day_icon(day)
+        cn_desc, icon = _wttr_desc(desc)
+        date_obj = today
+        try:
+            date_obj = dt.date.fromisoformat(date_str)
+        except ValueError:
+            pass
+        max_temp = _round(day.get("maxtempC"))
+        min_temp = _round(day.get("mintempC"))
+        if max_temp is not None and min_temp is not None and max_temp < min_temp:
+            max_temp, min_temp = min_temp, max_temp
+        forecast.append(
+            {
+                "date": date_str,
+                "weekday": "今天" if date_obj == today else WEEKDAYS[date_obj.weekday()],
+                "code": None,
+                "desc": cn_desc,
+                "icon": icon,
+                "temp_max": max_temp,
+                "temp_min": min_temp,
+                "rain_prob": rain_prob,
+                "wind_max": _round(day.get("hourly", [{}])[4].get("windspeedKmph"))
+                if len(day.get("hourly") or []) > 4
+                else None,
+            }
+        )
+
+    current = conditions[0]
+    cur_desc, cur_icon = _wttr_desc(((current.get("weatherDesc") or [{}])[0] or {}).get("value") or "")
+
+    return {
+        "city": label,
+        "region": region,
+        "latitude": lat,
+        "longitude": lon,
+        "timezone": data.get("NearestArea", [{}])[0].get("timezone")
+        if isinstance(data.get("NearestArea"), list) and data.get("NearestArea")
+        else None,
+        "updated_at": dt.datetime.now().isoformat(timespec="minutes"),
+        "source": "wttr.in",
+        "current": {
+            "temp": _round(current.get("temp_C")),
+            "desc": cur_desc,
+            "icon": cur_icon,
+            "wind": _round(current.get("windspeedKmph")),
+            "humidity": _as_int(current.get("humidity")),
+        },
+        "days": forecast,
+    }
+
+
+# wttr.in 给的是英文天气描述，按关键词翻成和主源同一套中文 + 图标
+_WTTR_KEYWORDS: list[tuple[tuple[str, ...], str, str]] = [
+    (("thunder", "storm"), "雷阵雨", "thunder"),
+    (("blizzard", "heavy snow"), "大雪", "snow"),
+    (("snow", "sleet", "ice pellets"), "雪", "snow"),
+    (("freezing", "ice"), "冻雨", "rain"),
+    (("torrential", "heavy rain"), "大雨", "rain"),
+    (("drizzle",), "毛毛雨", "drizzle"),
+    (("shower",), "阵雨", "rain"),
+    (("rain", "light rain", "patchy rain"), "小雨", "rain"),
+    (("fog", "mist", "haze"), "有雾", "fog"),
+    (("overcast",), "阴", "cloudy"),
+    (("cloud",), "多云", "partly"),
+    (("sun", "clear"), "晴", "sunny"),
+]
+
+
+def _wttr_desc(text: str) -> tuple[str, str]:
+    """英文天气描述 → (中文描述, 图标 key)；认不出来的按多云处理，不报错"""
+    lowered = (text or "").lower()
+    for words, cn, icon in _WTTR_KEYWORDS:
+        if any(word in lowered for word in words):
+            return cn, icon
+    return ("多云", "cloudy")
+
+
+def _as_int(value) -> int | None:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _pick(values, index: int):

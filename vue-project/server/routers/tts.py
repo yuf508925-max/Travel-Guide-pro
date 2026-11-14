@@ -16,6 +16,7 @@ from ..db import db
 from ..llm_settings import mask_key
 from ..config import SOVITS_API_URL, SOVITS_PROMPT_TEXT
 from ..tts_qwen import DEFAULT_MODEL, DEFAULT_VOICE, TTS_MODELS, TtsError, synthesize
+from .. import usage
 from ..tts_sovits import SovitsError, local_ready, ref_audio_path
 from ..tts_sovits import synthesize as synthesize_local
 from .auth import current_user
@@ -130,6 +131,11 @@ async def speak(body: SpeakIn, user: dict = Depends(current_user)):
     # 1) 优先用本地的芙宁娜音色（GPT-SoVITS）
     try:
         audio = await synthesize_local(text, settings.get("prompt_text", ""))
+        # record() 是 keyword-only，且打点失败不能连累语音本身
+        try:
+            usage.record(kind="tts_key", detail="tts|GPT-SoVITS · 芙宁娜", user_id=user["id"])
+        except Exception:
+            pass
         return Response(
             content=audio,
             media_type="audio/wav",
@@ -147,6 +153,11 @@ async def speak(body: SpeakIn, user: dict = Depends(current_user)):
             )
         except TtsError as exc:
             raise HTTPException(502, f"{local_error}；云端合成也失败：{exc}") from exc
+
+        try:
+            usage.record(kind="tts_key", detail=f"tts|{settings['model']}", user_id=user["id"])
+        except Exception:
+            pass
 
         return Response(
             content=audio,

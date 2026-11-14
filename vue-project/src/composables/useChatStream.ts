@@ -7,7 +7,7 @@
 //   以后接真后端时只改这一个文件，界面一行都不用动。
 // =====================================================================
 
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, getCurrentInstance, onBeforeUnmount, ref } from 'vue'
 
 // 导出给组件复用（MessageList.vue 用它标注 props 类型）
 export interface Message {
@@ -27,6 +27,10 @@ const TICK_MS = 50          // 每 50ms 放一次字
 const CHARS_PER_TICK = 1    // 正常速度：每次 1 字 → 约 20 字/秒
 const QUEUE_SLACK = 60      // 队列积压超过这个数就自动加速，避免长回复等太久
 
+// 「通话中先攒文字」是全局开关：所有对话实例共用同一个 ref，
+// 电话一挂断，正在生成的那个流就能立刻把文字放出来。
+const sharedHoldAi = ref(false)
+
 export function useChatStream(options?: {
   // 每放出一个字就回调一次 —— 接 TTS 时把朗读逻辑挂在这里
   onChar?: (ch: string) => void
@@ -36,11 +40,14 @@ export function useChatStream(options?: {
   // ------------------------------------------------------------------
   const messages = ref<Message[]>([])
 
+  // 当前所在对话（由页面设置；换对话时页面会清空 messages）
+  const currentConversationId = ref<number | null>(null)
+
   // isTyping：整轮回复是否还没结束（决定输入框能不能用）
   const isTyping = ref(false)
 
   // holdAi：通话模式下先把文字攒着不显示，等语音准备好再一起放出来
-  const holdAi = ref(false)
+  const holdAi = sharedHoldAi
   const heldText = ref('')
   let heldMessage: Message | null = null
 
@@ -50,6 +57,35 @@ export function useChatStream(options?: {
 
   // 思考过程的原文（默认不展示，留着调试或以后做"展开思考过程"）
   const thinkingText = ref('')
+
+  // toolHint：芙芙正在调工具时的提示（"正在查天气…"）
+  //   后端会在调工具前后各推一帧 type='tool'，这里翻成人话显示在思考气泡里，
+  //   否则查一次天气要等几秒，用户会以为卡住了
+  const toolHint = ref('')
+
+  const TOOL_LABELS: Record<string, string> = {
+    get_weather: '查天气',
+    query_trains: '查火车班次',
+    plan_route: '规划路线',
+  }
+
+  function describeTool(raw: unknown): string {
+    try {
+      const info = JSON.parse(String(raw ?? '{}')) as {
+        status?: string
+        name?: string
+        ok?: boolean
+        error?: string
+      }
+      const label = TOOL_LABELS[info.name ?? ''] ?? '查资料'
+      if (info.status === 'done') {
+        return info.ok ? `已经${label}了` : `${label}没成功：${info.error || '未知原因'}`
+      }
+      return `正在${label}…`
+    } catch {
+      return ''
+    }
+  }
 
   // ---- 逐字输出的内部状态 ----
   let queue: string[] = []                  // 待显示的字符队列
@@ -109,7 +145,7 @@ export function useChatStream(options?: {
   }
 
   // 组件卸载时清掉定时器，避免内存泄漏
-  onBeforeUnmount(stopConsumer)
+  if (getCurrentInstance()) onBeforeUnmount(stopConsumer)
 
   // ------------------------------------------------------------------
   // sendMessage：用户发一条消息（MessageInput 触发 @send 时调用）
@@ -139,6 +175,7 @@ export function useChatStream(options?: {
     isTyping.value = true
     isThinking.value = true       // 立刻进入"思考中"，前端马上有反馈
     thinkingText.value = ''
+    toolHint.value = ''
     queue = []
 
     // ==================================================================
@@ -155,7 +192,12 @@ export function useChatStream(options?: {
         // 不用在这里带 Key：后端会根据 Session Cookie 找到当前账号，
         // 再用该账号在 user_providers 表里激活的那套 Key / Base URL / 模型（见 llm_settings.py）
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content, history }),
+        body: JSON.stringify({
+          message: content,
+          history,
+          // 当前对话 id：后端据此取这段对话的摘要当记忆（换对话就换记忆）
+          conversation_id: currentConversationId.value,
+        }),
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
 
@@ -183,9 +225,12 @@ export function useChatStream(options?: {
 
           if (data.type === 'text') {
             isThinking.value = false        // 正文来了，收起"思考中"
+            toolHint.value = ''             // 工具提示也该退场了
             enqueue(String(data.text ?? ''), aiMsg)
           } else if (data.type === 'thinking') {
             thinkingText.value += String(data.text ?? '')
+          } else if (data.type === 'tool') {
+            toolHint.value = describeTool(data.text)
           }
           // 'status' 帧不用处理：isThinking 一开始就是 true
         }
@@ -210,6 +255,7 @@ export function useChatStream(options?: {
     } finally {
       isTyping.value = false                // 无论成败都要解锁输入框
       isThinking.value = false
+      toolHint.value = ''
     }
   }
 
@@ -222,5 +268,28 @@ export function useChatStream(options?: {
     return payload
   }
 
-  return { messages, isTyping, isThinking, thinkingText, sendMessage, holdAi, takeHeld }
+  /** 清空当前消息（切换 / 新建对话时用） */
+  function resetMessages() {
+    stopConsumer()
+    queue = []
+    target = null
+    messages.value = []
+    isTyping.value = false
+    isThinking.value = false
+    thinkingText.value = ''
+    toolHint.value = ''
+  }
+
+  return {
+    messages,
+    isTyping,
+    isThinking,
+    thinkingText,
+    toolHint,
+    sendMessage,
+    holdAi,
+    takeHeld,
+    resetMessages,
+    currentConversationId,
+  }
 }

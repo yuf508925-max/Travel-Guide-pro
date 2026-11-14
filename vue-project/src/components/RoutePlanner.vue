@@ -8,9 +8,10 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import SearchBar from './SearchBar.vue'
 import { hasAmapKey, loadAmap, loadAmapConfig } from '../composables/useAmap'
+import { reportAmap } from '../composables/useUsage'
 import {
-  deleteRouteSearch,
   fetchLastSearch,
   fetchRecentSearches,
   saveRouteSearch,
@@ -167,10 +168,8 @@ function pickStation(side: 'from' | 'to', station: string) {
 // ---- 输入框下拉建议：点城市/出发地/目的地，列出以前查过的内容 ----
 type Field = 'city' | 'origin' | 'destination'
 
-const openField = ref<Field | null>(null)
 const history = ref<RouteSearch[]>([])
 const historyLoaded = ref(false)
-
 
 // 出发地/目的地按当前填的城市过滤，避免把别的城市的地名混进来
 function sameCity(item: RouteSearch, name: string): boolean {
@@ -217,22 +216,15 @@ const destinationSuggestions = computed(() =>
 )
 
 async function removeSuggestion(id: number) {
-  const ok = await deleteRouteSearch(id)
-  if (ok) {
-    history.value = await fetchRecentSearches(20)
-    historyLoaded.value = true
-  }
+  // 接口删除由 SearchBar 负责，这里只把本地那份建议同步掉
+  history.value = history.value.filter((item) => item.id !== id)
 }
 
-async function openSuggest(field: Field) {
-  openField.value = field
+/** 载入历史（三个输入框共用一份，下拉由 SearchBar 展示） */
+async function loadHistory() {
   if (historyLoaded.value) return
   history.value = await fetchRecentSearches(20)
   historyLoaded.value = true
-}
-
-function closeSuggest() {
-  openField.value = null
 }
 
 /** 选中一条历史：填进对应输入框，两个地址都齐了就直接查路线 */
@@ -240,8 +232,6 @@ function pickSuggestion(field: Field, value: string) {
   if (field === 'city') city.value = value
   else if (field === 'origin') origin.value = value
   else destination.value = value
-
-  closeSuggest()
 
   if (origin.value.trim() && destination.value.trim()) {
     void plan()
@@ -254,9 +244,6 @@ function onDocumentDown(event: PointerEvent) {
   if (stationOpen.value && !(target && target.closest('.station-pick'))) {
     stationOpen.value = null
   }
-  if (!openField.value) return
-  if (target && target.closest('.route-field')) return
-  closeSuggest()
 }
 
 // Key 由后端内置（server/config.py），前端只负责读一次；
@@ -326,6 +313,7 @@ function searchPoi(address: string): Promise<Place | null> {
     const searcher = hint
       ? new AMap.PlaceSearch({ city: hint, citylimit: true, pageSize: 10 })
       : new AMap.PlaceSearch({ citylimit: false, pageSize: 10 })
+    reportAmap('place-search')
     searcher.search(address, (status: string, result: any) => {
       const pois: any[] = result?.poiList?.pois ?? []
       if (status !== 'complete' || !pois.length) {
@@ -352,6 +340,7 @@ function searchPoi(address: string): Promise<Place | null> {
 function geocode(address: string): Promise<Place | null> {
   return new Promise((resolve) => {
     const geocoder = new AMap.Geocoder({ city: city.value.trim() || '全国' })
+    reportAmap('geocode')
     geocoder.getLocation(address, (status: string, result: any) => {
       const first = result?.geocodes?.[0]
       if (status === 'complete' && first?.location) {
@@ -658,13 +647,16 @@ async function plan() {
         })
         // 下次点输入框要能看到这次的记录
         historyLoaded.value = false
+        void loadHistory()
         resolve()
       }
 
       if (mode.value === 'driving') {
+        reportAmap('driving')
         service = new AMap.Driving({ map, policy: AMap.DrivingPolicy?.LEAST_TIME ?? 0 })
         service.search(start.location, end.location, done)
       } else if (mode.value === 'walking') {
+        reportAmap('walking')
         service = new AMap.Walking({ map })
         service.search(start.location, end.location, done)
       } else {
@@ -674,6 +666,7 @@ async function plan() {
           return
         }
         // city = 出发城市，cityd = 到达城市（跨城公交时才有区别）
+        reportAmap('transfer')
         service = new AMap.Transfer({ map, city: cityName, cityd: end.city || cityName })
         service.search(start.location, end.location, done)
       }
@@ -742,6 +735,7 @@ onMounted(async () => {
 
   if (!needKey.value) await initMap()
   await restoreLastSearch()
+  void loadHistory()
 })
 
 onBeforeUnmount(() => {
@@ -780,106 +774,46 @@ onBeforeUnmount(() => {
         <div class="route-form">
           <!-- 城市：点一下列出以前查过的城市 -->
           <div class="route-field route-field--city">
-            <input
+            <SearchBar
               v-model="city"
-              class="route-input route-input--city"
-              type="text"
+              :suggestions="citySuggestions"
               placeholder="城市"
               title="点一下可以选以前查过的城市"
-              @focus="openSuggest('city')"
-              @keyup.enter="plan"
-              @keydown.esc="closeSuggest"
+              :maxlength="20"
+              @search="plan"
+              @pick="pickSuggestion('city', $event)"
+              @remove="removeSuggestion"
             />
-            <ul v-if="openField === 'city' && citySuggestions.length" class="suggest">
-              <li v-for="item in citySuggestions" :key="item.id">
-                <button
-                  type="button"
-                  class="suggest__pick"
-                  @mousedown.prevent="pickSuggestion('city', item.label)"
-                >
-                  {{ item.label }}
-                </button>
-                <button
-                  type="button"
-                  class="suggest__del"
-                  title="删除这条记录"
-                  @mousedown.prevent="removeSuggestion(item.id)"
-                >
-                  <svg class="suggest__del-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
-                </button>
-              </li>
-            </ul>
           </div>
 
           <!-- 出发地 -->
           <div class="route-field">
-            <input
+            <SearchBar
               v-model="origin"
-              class="route-input"
-              type="text"
+              :suggestions="originSuggestions"
               placeholder="出发地，如 八中 / 湖滨路 12 号"
               title="点一下可以选以前查过的出发地"
-              @focus="openSuggest('origin')"
-              @keyup.enter="plan"
-              @keydown.esc="closeSuggest"
+              :maxlength="60"
+              @search="plan"
+              @pick="pickSuggestion('origin', $event)"
+              @remove="removeSuggestion"
             />
-            <ul v-if="openField === 'origin' && originSuggestions.length" class="suggest">
-              <li v-for="item in originSuggestions" :key="item.id">
-                <button
-                  type="button"
-                  class="suggest__pick"
-                  @mousedown.prevent="pickSuggestion('origin', item.label)"
-                >
-                  {{ item.label }}
-                </button>
-                <button
-                  type="button"
-                  class="suggest__del"
-                  title="删除这条记录"
-                  @mousedown.prevent="removeSuggestion(item.id)"
-                >
-                  <svg class="suggest__del-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
-                </button>
-              </li>
-            </ul>
           </div>
 
           <span class="route-arrow" aria-hidden="true">→</span>
 
           <!-- 目的地 -->
           <div class="route-field">
-            <input
+            <SearchBar
               v-model="destination"
-              class="route-input"
-              type="text"
+              :suggestions="destinationSuggestions"
               placeholder="目的地，如 万达广场 / 第一医院"
               title="点一下可以选以前查过的目的地"
-              @focus="openSuggest('destination')"
-              @keyup.enter="plan"
-              @keydown.esc="closeSuggest"
+              :maxlength="60"
+              @search="plan"
+              @pick="pickSuggestion('destination', $event)"
+              @remove="removeSuggestion"
             />
-            <ul
-              v-if="openField === 'destination' && destinationSuggestions.length"
-              class="suggest"
-            >
-              <li v-for="item in destinationSuggestions" :key="item.id">
-                <button
-                  type="button"
-                  class="suggest__pick"
-                  @mousedown.prevent="pickSuggestion('destination', item.label)"
-                >
-                  {{ item.label }}
-                </button>
-                <button
-                  type="button"
-                  class="suggest__del"
-                  title="删除这条记录"
-                  @mousedown.prevent="removeSuggestion(item.id)"
-                >
-                  <svg class="suggest__del-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
-                </button>
-              </li>
-            </ul>
           </div>
 
           <select v-model="mode" class="route-select">

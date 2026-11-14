@@ -9,14 +9,20 @@
 // user 是模块级 ref：任何组件调用 useAuth() 拿到的都是同一份状态。
 // =====================================================================
 
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 interface AuthResult {
   username: string
+  role: 'user' | 'admin'
 }
 
 // 当前登录的用户名；null 表示未登录
 export const user = ref<string | null>(null)
+
+// 当前账号的角色：只有 admin 会看到「后台管理」入口
+export const role = ref<'user' | 'admin'>('user')
+
+export const isAdmin = computed(() => role.value === 'admin')
 
 // 把后端返回的错误体转成一句可读的话。
 // FastAPI 的 detail 有三种可能：
@@ -74,6 +80,7 @@ export function useAuth() {
       body: JSON.stringify({ username, password }),
     })
     user.value = data.username
+    role.value = data.role
     return data.username
   }
 
@@ -83,6 +90,7 @@ export function useAuth() {
       body: JSON.stringify({ username, password }),
     })
     user.value = data.username
+    role.value = data.role
     return data.username
   }
 
@@ -91,8 +99,10 @@ export function useAuth() {
     try {
       const data = await request<AuthResult>('/api/auth/me')
       user.value = data.username
+      role.value = data.role
     } catch {
       user.value = null
+      role.value = 'user'
     }
   }
 
@@ -101,8 +111,9 @@ export function useAuth() {
       await fetch('/api/auth/logout', { method: 'POST' })
     } finally {
       user.value = null
+      role.value = 'user'
     }
   }
 
-  return { user, login, register, fetchMe, logout }
+  return { user, role, isAdmin, login, register, fetchMe, logout }
 }

@@ -6,19 +6,30 @@
 ==================================================================== -->
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, shallowRef, watch, onMounted, onBeforeUnmount } from 'vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import Live2DStage from '../components/Live2DStage.vue'
+import ClockWidget from '../components/ClockWidget.vue'
 import WeatherPanel from '../components/WeatherPanel.vue'
 import BalanceWidget from '../components/BalanceWidget.vue'
+import MemoryPanel from '../components/MemoryPanel.vue'
+import AnnouncementPanel from '../components/AnnouncementPanel.vue'
+import MusicPlayer from '../components/MusicPlayer.vue'
 import RoutePlanner from '../components/RoutePlanner.vue'
+import VlogPanel from '../components/VlogPanel.vue'
+import VideoFloat from '../components/VideoFloat.vue'
+import type { VlogVideo } from '../types/vlog'
 import { resetAmapConfig } from '../composables/useAmap'
 import VolumeMenu from '../components/VolumeMenu.vue'
 import SettingsMenu from '../components/SettingsMenu.vue'
 import PhoneCall from '../components/PhoneCall.vue'
 import CallPanel from '../components/CallPanel.vue'
 import { useChatStream } from '../composables/useChatStream'
+import { useConversations } from '../composables/useConversations'
+import { useLipSync } from '../composables/useLipSync'
+import { useAnnouncements } from '../composables/useAnnouncements'
+import { useLive2DActor, type ChatTurn, type Live2DAction } from '../composables/useLive2DActor'
 
 // ------------------------------------------------------------------
 // Live2D 动作控制
@@ -34,15 +45,19 @@ const motions = [
   { label: '变荒', group: '变荒',    index: 0 },
 ]
 
-// model3.json 里定义的 16 个表情（Expressions），也当作"动作"给芙芙换脸/换道具
+// model3.json 里定义的表情（Expressions），也当作"动作"给芙芙换脸/换道具
+// 鱼鱼 / 汗 两个表情已经拿掉了：面板上不显示，AI 那边也不会再挑
 const expressions = [
   '呆毛电风扇', '哭', '喝饮料', '大聪明',
   '小脸红', '帽子', '托脸', '拿勺子',
-  '拿蛋糕', '捂嘴', '星星', '汗',
-  '猫猫嘴', '生气', '走路切换', '鱼鱼',
+  '拿蛋糕', '捂嘴', '星星',
+  '猫猫嘴', '生气', '走路切换',
 ]
 
-function triggerMotion(group: string, index: number) {
+function triggerMotion(group: string, index: number, fromAi = false) {
+  // AI 控制模式下动作归大模型管，手动按钮一律不响应（按钮本身也是 disabled，
+  // 这里再拦一道，防止键盘回车/残留点击偷偷改掉她的表演）
+  if (aiMode.value && !fromAi) return
   // 「待机」是自动循环的默认动画，直接 playMotion('Idle') 会被库拒绝，
   // 所以走专用的 resetToIdle：先停掉当前动作，再从头重播待机。
   if (group === 'Idle') {
@@ -52,12 +67,137 @@ function triggerMotion(group: string, index: number) {
   }
 }
 
-function triggerExpression(name: string) {
+function triggerExpression(name: string, fromAi = false) {
+  if (aiMode.value && !fromAi) return
   live2dRef.value?.setExpression(name)
 }
 
 function toggleActions() {
   showActions.value = !showActions.value
+}
+
+// ------------------------------------------------------------------
+// AI 控制模式
+//   开：芙芙自己挑表情/动作（每轮回复后问一次大模型），眼睛不再跟着鼠标
+//   关：还是原来那套手动按钮
+// ------------------------------------------------------------------
+// 动作名归一化：大模型可能回组名（TapBody），也可能回面板上的中文标签（摊手）
+const MOTION_ALIASES: Record<string, string> = {
+  Idle: 'Idle',
+  待机: 'Idle',
+  TapBody: 'TapBody',
+  摊手: 'TapBody',
+  变芒: '变芒',
+  变荒: '变荒',
+}
+
+// 口型同步：把正在播的 TTS 音量逐帧写进 ParamMouthOpenY
+const lipSync = useLipSync((v) => live2dRef.value?.setMouthOpen(v))
+
+const actor = useLive2DActor()
+const aiMode = actor.aiMode
+
+/** 大模型挑完了，落到模型上。先播动作再换表情：
+ *  变芒/变荒/待机这些动作会 resetAllParameters + resetExpression，
+ *  顺序反了刚换上的表情会被动作复位掉。 */
+function applyAiAction(action: Live2DAction) {
+  if (!aiMode.value) return
+  const group = action.motion ? MOTION_ALIASES[action.motion] : ''
+  if (group) triggerMotion(group, 0, true)
+  if (action.expression) triggerExpression(action.expression, true)
+}
+
+/** 当前对话里最后一条 AI 回复 / 用户消息 */
+function lastAiText(): string {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const m = messages.value[i]
+    if (m?.role === 'ai') return (m.text ?? '').trim()
+  }
+  return ''
+}
+
+function lastUserText(): string {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const m = messages.value[i]
+    if (m?.role === 'user') return (m.text ?? '').trim()
+  }
+  return ''
+}
+
+/** 请大模型挑表情/动作时要看的上下文：当前对话最近 8 条消息。
+ *  注意只读 messages（= 当前激活的那条对话），切到别的对话就是别的数组。 */
+function recentHistory(): ChatTurn[] {
+  const turns: ChatTurn[] = []
+  for (let i = messages.value.length - 1; i >= 0 && turns.length < 8; i -= 1) {
+    const m = messages.value[i]
+    const text = (m?.text ?? '').trim()
+    if (!m || !text) continue
+    turns.unshift({ role: m.role, text: text.slice(0, 400) })
+  }
+  return turns
+}
+
+/**
+ * 请大模型挑一个表情/动作（模式关着时内部会直接返回空）。
+ * @param idle true = 挂机一分钟的自发小表情，此刻没有新台词
+ *
+ * 隔离：这里记下提问时属于哪个对话，结果回来如果对话已经切走就丢弃——
+ * 否则旧对话的表情会跑到新对话里，还白打断新的表演。
+ */
+/** 每条对话上一轮演过的动作/表情。
+ *  只用来告诉大模型「别又挑这个」——分开存，切对话不会互相影响。 */
+const lastActionByConv = new Map<number, Live2DAction>()
+
+// 模型有时候嘴硬，连着两轮给同一个表情；这时从前几个温和的表情里随便换一个，
+// 至少让人看得出来"她换表情了"，而不是以为功能坏了。
+const GENTLE_FALLBACKS = ['小脸红', '猫猫嘴', '星星', '托脸', '捂嘴', '大聪明']
+
+function pickDifferentExpression(prev: string | null): string {
+  const pool = GENTLE_FALLBACKS.filter((n) => n !== prev && expressions.includes(n))
+  const pick = pool[Math.floor(Math.random() * pool.length)]
+  return pick ?? ''
+}
+
+async function askForAction(idle = false, replyOverride = '') {
+  if (!aiMode.value) return
+
+  const convId = currentConversationId.value
+  const reply = idle ? '' : (replyOverride || lastAiText())
+  if (!idle && !reply) return
+  // 挂机触发时如果她正好在说话/打电话，就别抢戏了
+  if (idle && (isTyping.value || showCall.value)) return
+
+  const prev = convId == null ? null : lastActionByConv.get(convId)
+  const action = await actor.request({
+    reply,
+    user: idle ? '' : lastUserText(),
+    history: recentHistory(),
+    idle,
+    previous: prev ? { motion: prev.motion, expression: prev.expression } : null,
+  })
+  if (!action) return
+  if (convId !== currentConversationId.value || !aiMode.value) return
+
+  // 跟上一轮一模一样（动作+表情都没变）就兜个底，换个温和的表情
+  if (prev && !idle && action.motion === prev.motion && action.expression === prev.expression) {
+    const alt = pickDifferentExpression(prev.expression)
+    if (alt) action.expression = alt
+  }
+
+  applyAiAction(action)
+  if (convId != null) lastActionByConv.set(convId, action)
+  resetIdleTimer()
+}
+
+function toggleAiMode() {
+  aiMode.value = !aiMode.value
+  // 刚打开时先就着当前上下文演一个，不用干等下一轮
+  if (aiMode.value) {
+    void askForAction()
+    resetIdleTimer()
+  } else {
+    clearIdleTimer()
+  }
 }
 
 const props = defineProps({
@@ -67,7 +207,208 @@ const emit = defineEmits(['logout'])
 
 // 聊天逻辑全部在 useChatStream 里（发消息、假流式回复、消息列表）
 // 界面组件只负责展示，互相之间靠 props 和事件传话
-const { messages, isTyping, isThinking, sendMessage, holdAi, takeHeld } = useChatStream()
+// ------------------------------------------------------------------
+// 每个对话一个独立的流实例
+//   · 切走时旧对话的流继续跑，输入框只受「当前对话」的 isTyping 锁
+//   · 切回来还能看到那条回复的完整内容
+// ------------------------------------------------------------------
+type ChatStream = ReturnType<typeof useChatStream>
+
+const streams = new Map<number, ChatStream>()
+const stream = shallowRef<ChatStream>(useChatStream())
+
+const currentConversationId = ref<number | null>(null)
+
+// 切对话 / 刚打开页面时，历史文字直接显示（不做逐个冒泡），
+// 等用户真的发了一条消息再恢复动画
+const suppressBubble = ref(true)
+
+const messages = computed(() => stream.value.messages.value)
+const isTyping = computed(() => stream.value.isTyping.value)
+const isThinking = computed(() => stream.value.isThinking.value)
+// 芙芙正在调工具（查天气 / 查车次 / 算路线）时的那句提示
+const toolHint = computed(() => stream.value.toolHint.value)
+const holdAi = stream.value.holdAi
+
+function sendMessage(text: string) {
+  suppressBubble.value = false
+  void stream.value.sendMessage(text)
+}
+
+function takeHeld() {
+  return stream.value.takeHeld()
+}
+
+function streamFor(id: number | null): ChatStream {
+  if (!id) return stream.value
+  let s = streams.get(id)
+  if (!s) {
+    s = useChatStream()
+    s.currentConversationId.value = id
+    streams.set(id, s)
+  }
+  return s
+}
+
+/** 把当前激活的流换成某个对话的流 */
+function activateStream(id: number | null) {
+  stream.value = streamFor(id)
+}
+
+// ------------------------------------------------------------------
+// 多个对话：每条对话各自一份记忆（后端只存摘要）
+// ------------------------------------------------------------------
+const {
+  conversations,
+  load: loadConversations,
+  create: createConversation,
+  rename: renameConversation,
+  remove: deleteConversation,
+  summarize,
+} = useConversations()
+
+const showMemory = ref(false)
+
+// 公告：顶栏红点看「有没有没看过的」，打开面板即全部标为已读
+const showNotice = ref(false)
+const { unreadCount: noticeUnread, loadNotices } = useAnnouncements()
+
+const convOpen = ref(false)
+const renamingId = ref<number | null>(null)
+const renameDraft = ref('')
+
+const currentTitle = computed(
+  () => conversations.value.find((c) => c.id === currentConversationId.value)?.title ?? '对话',
+)
+
+function snapshot() {
+  return messages.value.map((m) => ({ role: m.role, text: m.text }))
+}
+
+/**
+ * 把当前这段对话压成摘要存进它自己的记录（切走 / 关网页时调）。
+ * 注意：这里**不 await**——摘要要走一次模型调用（1~3 秒），
+ * 让它去后台跑，界面该切就立刻切。
+ */
+function saveCurrent(keepalive = false) {
+  const id = currentConversationId.value
+  if (!id) return
+  const all = snapshot()
+  // 只把「上次总结之后新增的那一段」发上去，避免重复计费 / 重复写记忆
+  const done = conversations.value.find((c) => c.id === id)?.summarized_upto ?? 0
+  const msgs = all.slice(done)
+  if (msgs.filter((m) => m.text.trim()).length < 2) return
+  void summarize(id, msgs, keepalive).catch(() => '')
+}
+
+/**
+ * 每凑够 10 条就总结一次（中途也记，不等关网页）。
+ * 由 ChatView 在「一条回复结束」时调用。
+ */
+const SUMMARY_EVERY = 10
+function maybeSummarize() {
+  const id = currentConversationId.value
+  if (!id) return
+  const done = conversations.value.find((c) => c.id === id)?.summarized_upto ?? 0
+  if (snapshot().length - done >= SUMMARY_EVERY) saveCurrent()
+}
+
+function switchConv(id: number) {
+  if (id === currentConversationId.value) {
+    convOpen.value = false
+    return
+  }
+  saveCurrent()
+
+  // 换到目标对话自己的流：它的输入框是否锁，只看它自己有没有在回复
+  currentConversationId.value = id
+  suppressBubble.value = true
+  activateStream(id)
+  localStorage.setItem('fufu-conversation', String(id))
+  convOpen.value = false
+
+  // 但语音要停：继续念旧对话的内容会串台
+  if (showCall.value || callStage.value === 'active') closeCall()
+}
+
+async function newConv() {
+  saveCurrent()
+  const item = await createConversation('新的对话')
+  currentConversationId.value = item.id
+  suppressBubble.value = true
+  activateStream(item.id)
+  localStorage.setItem('fufu-conversation', String(item.id))
+  if (showCall.value || callStage.value === 'active') closeCall()
+  // 菜单不关：紧接着弹出重命名输入框，让用户直接给新对话起名
+  renamingId.value = item.id
+  renameDraft.value = ''
+}
+
+function startRename(id: number) {
+  const target = conversations.value.find((c) => c.id === id)
+  renamingId.value = id
+  renameDraft.value = target?.title ?? ''
+}
+
+async function commitRename() {
+  const id = renamingId.value
+  const title = renameDraft.value.trim()
+  renamingId.value = null
+  if (!id || !title) return
+  await renameConversation(id, title).catch(() => null)
+}
+
+async function removeConv(id: number) {
+  if (!window.confirm('删除这个对话？它记住的内容会一起删掉。')) return
+  await deleteConversation(id).catch(() => null)
+  streams.delete(id)
+  if (id !== currentConversationId.value) return
+
+  const next = conversations.value[0]
+  if (next) {
+    currentConversationId.value = next.id
+    suppressBubble.value = true
+  activateStream(next.id)
+    localStorage.setItem('fufu-conversation', String(next.id))
+    if (showCall.value || callStage.value === 'active') closeCall()
+    return
+  }
+
+  // 一个都不剩：开一个新的空对话
+  const item = await createConversation('新的对话').catch(() => null)
+  if (!item) return
+  currentConversationId.value = item.id
+  activateStream(item.id)
+  localStorage.setItem('fufu-conversation', String(item.id))
+}
+
+const onPageLeave = () => {
+  void saveCurrent(true)
+}
+
+const onVisibilityLeave = () => {
+  if (document.visibilityState === 'hidden') void saveCurrent(true)
+}
+
+async function initConversations() {
+  const list = await loadConversations().catch(() => [])
+  if (!list.length) {
+    const item = await createConversation('新的对话').catch(() => null)
+    if (item) {
+      currentConversationId.value = item.id
+      activateStream(item.id)
+      localStorage.setItem('fufu-conversation', String(item.id))
+    }
+    return
+  }
+  const saved = Number(localStorage.getItem('fufu-conversation') || 0)
+  const pick = list.find((c) => c.id === saved) ?? list[0]
+  if (!pick) return
+  currentConversationId.value = pick.id
+  suppressBubble.value = true
+  activateStream(pick.id)
+  localStorage.setItem('fufu-conversation', String(pick.id))
+}
 
 // ------------------------------------------------------------------
 // 顶部导航按钮（红框里那三个）
@@ -97,14 +438,13 @@ const navButtons = ref([
     ],
   },
   {
-    key: 'poster',
-    text: '旅行一图流',
-    hint: '旅行一图流 · 即将上线',
-    // 图片框：外框 + 左上小太阳 + 底部的山，用来表示"把行程画成一张图"
+    key: 'vlog',
+    text: '观看vlog',
+    hint: '看 B 站上和这个地区相关的旅行 vlog（点开是浮窗播放器）',
+    // 播放键：圆角方框 + 中间的三角，表示"看视频"
     paths: [
-      'M5 3.5h14a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V5A1.5 1.5 0 0 1 5 3.5Z',
-      'M9.2 9.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5',
-      'M4.2 17.4l4.6-4.9 3.1 3.1 2.5-2.5 5.4 5.3',
+      'M6.5 3.5h11A3 3 0 0 1 20.5 6.5v11a3 3 0 0 1-3 3h-11a3 3 0 0 1-3-3v-11a3 3 0 0 1 3-3Z',
+      'M10 8.6v6.8l5.6-3.4Z',
     ],
   },
   {
@@ -129,6 +469,15 @@ const activeNav = ref(0)
 const showWeather = ref(false)
 // 行程面板（高德路线地图）
 const showRoute = ref(false)
+// 观看 vlog 面板（B 站旅行视频）
+const showVlog = ref(false)
+// 正在浮窗里播放的视频；null = 没开播放器
+const activeVideo = ref<VlogVideo | null>(null)
+
+/** 点 vlog 卡片：开浮窗播放器（面板关掉它也不停） */
+function openVideo(video: VlogVideo) {
+  activeVideo.value = video
+}
 // 上次查过的省 / 市，分开存；下次打开直接回到那个城市
 const weatherProvince = ref(readSavedPlace().province)
 const weatherCity = ref(readSavedPlace().city)
@@ -185,9 +534,69 @@ function dialCall() {
   showCall.value = true
 }
 
+// 把「通话期间攒着没显示」的文字一次性放出来（所有对话的流都要放，
+// 否则切走那条对话的回复会永远停在一半）
+function flushAllHeld() {
+  const all = [stream.value, ...streams.values()]
+  for (const s of all) {
+    const held = s.takeHeld()
+    if (held) held.message.text = held.text
+  }
+}
+
 function closeCall() {
   showCall.value = false
   callStage.value = 'idle'
+  lipSync.stop()   // 挂断后别再让嘴动（音频会被 PhoneCall 卸载时停掉）
+  flushAllHeld()
+}
+
+// ------------------------------------------------------------------
+// 挂机一分钟：她安静待着的时候，自己按当前对话的上下文换个表情
+//   - 计时只在「当前这条对话」里有效：切对话就归零，旧对话的计时器不会打到新对话身上
+//   - 正在打字 / 正在打电话 / 没开 AI 模式 都不计时
+// ------------------------------------------------------------------
+const IDLE_ACTION_MS = 60_000
+let idleTimer = 0
+
+function clearIdleTimer() {
+  if (idleTimer) {
+    clearTimeout(idleTimer)
+    idleTimer = 0
+  }
+}
+
+function resetIdleTimer() {
+  clearIdleTimer()
+  if (!aiMode.value) return
+  if (isTyping.value || showCall.value) return
+  if (!currentConversationId.value) return
+  // 还没聊过任何东西就没什么上下文可演，等有消息了 watcher 会再进来
+  if (recentHistory().length === 0) return
+  idleTimer = window.setTimeout(async () => {
+    idleTimer = 0
+    await askForAction(true)
+    // 换成功了 askForAction 已经重新计时；没换成（网络/模型抽风）就自己续上，
+    // 否则一次失败之后再也不会挂机触发了
+    if (!idleTimer && aiMode.value && !isTyping.value && !showCall.value) resetIdleTimer()
+  }, IDLE_ACTION_MS)
+}
+
+// 任何"新动静"都重新开始数 60 秒
+watch(
+  [aiMode, currentConversationId, isTyping, () => messages.value.length, showCall],
+  () => resetIdleTimer(),
+)
+
+// 切对话：旧对话在路上的动作请求直接掐掉，免得回来时演在新对话里
+watch(currentConversationId, () => {
+  actor.cancel()
+})
+
+// 标签页藏起来的时候不用演；切回来重新数 60 秒
+function onVisibilityIdle() {
+  if (document.hidden) clearIdleTimer()
+  else resetIdleTimer()
 }
 
 function selectNav(index: number) {
@@ -198,6 +607,7 @@ function selectNav(index: number) {
   if (key === 'tts') {
     showWeather.value = false
     showRoute.value = false
+    showVlog.value = false
     if (callStage.value === 'idle') {
       callStage.value = 'prompt'
     } else if (callStage.value === 'prompt') {
@@ -212,6 +622,7 @@ function selectNav(index: number) {
   // 天气：点一下开/关那个小窗口
   if (key === 'weather') {
     showRoute.value = false
+    showVlog.value = false
     showWeather.value = !showWeather.value
     activeNav.value = index
     return
@@ -220,7 +631,17 @@ function selectNav(index: number) {
   // 行程：打开路线规划面板（高德地图）
   if (key === 'trip') {
     showWeather.value = false
+    showVlog.value = false
     showRoute.value = !showRoute.value
+    activeNav.value = index
+    return
+  }
+
+  // 观看 vlog：打开 B 站视频面板
+  if (key === 'vlog') {
+    showWeather.value = false
+    showRoute.value = false
+    showVlog.value = !showVlog.value
     activeNav.value = index
     return
   }
@@ -230,7 +651,7 @@ function selectNav(index: number) {
   showRoute.value = false
   activeNav.value = index
   // TODO: 以后在这里根据 key 打开对应面板：
-  //   trip → 行程规划   poster → 旅行一图流   tts → 语音通话
+  //   tts → 语音通话（已在上面的分支里处理）
 }
 
 // ------------------------------------------------------------------
@@ -257,6 +678,11 @@ function applyVolume() {
 
 // 滑块拖动 / 静音切换都会触发
 watch([bgmVolume, muted], applyVolume)
+
+// 右上角「音乐」开始放用户自己的歌时，先把自带的 BGM 停掉，免得两首一起响
+function pauseBgm() {
+  audioRef.value?.pause()
+}
 
 // ------------------------------------------------------------------
 // 通话模式：文字先攒着，等语音合成好再"边说话边跳字"
@@ -287,19 +713,32 @@ function revealText(message: { text: string }, full: string, durationMs: number)
 }
 
 watch(isTyping, async (typing) => {
+  // 一轮回复结束：凑够 10 条就把新增的这段压成记忆（后台跑，不阻塞界面）
+  if (!typing) maybeSummarize()
+
   if (typing) {
     // 通话中：正文还在生成，继续显示思考提示
     if (showCall.value) callPending.value = true
     return
   }
-  if (!showCall.value) return
+
+  // 非通话：这轮文字已经收全，问一下大模型该摆什么表情/动作
+  if (!showCall.value) {
+    askForAction()
+    return
+  }
+
   const held = takeHeld()
   if (!held) return
 
   const { message, text } = held
   message.text = ''
+  // 通话里文字被 held 着，lastAiText() 读不到，直接把整段交过去
+  void askForAction(false, text)
   const duration = (await phoneRef.value?.speakAll(text)) ?? 0
-  // 语音已经开口，撤掉思考提示，文字跟着音频节奏跳出来
+  // 语音已经开口，让嘴跟着音量动起来；时长做兜底，防止 ended 事件丢失
+  lipSync.start(phoneRef.value?.getAudio() ?? null, duration)
+  // 撤掉思考提示，文字跟着音频节奏跳出来
   callPending.value = false
   revealText(message, text, duration)
 })
@@ -314,12 +753,28 @@ function resumeOnFirstGesture() {
   document.removeEventListener('pointerdown', resumeOnFirstGesture)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await initConversations()
+  window.addEventListener('pagehide', onPageLeave)
+  document.addEventListener('visibilitychange', onVisibilityLeave)
+  document.addEventListener('visibilitychange', onVisibilityIdle)
+
   applyVolume()
   tryPlay()
+  // 公告红点：进页面先拉一次列表（拿不到就当没有公告）
+  void loadNotices()
   document.addEventListener('pointerdown', resumeOnFirstGesture)
+  // 页面加载完可能已经是 AI 模式（存了 localStorage），先把 60 秒计时支起来
+  resetIdleTimer()
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', onPageLeave)
+  document.removeEventListener('visibilitychange', onVisibilityLeave)
+  document.removeEventListener('visibilitychange', onVisibilityIdle)
+  clearIdleTimer()
+  actor.cancel()
+  void saveCurrent(true)
+
   document.removeEventListener('pointerdown', resumeOnFirstGesture)
   // 退出登录时清掉当前账号的高德配置缓存，换账号会重新从后端读
   resetAmapConfig()
@@ -334,6 +789,8 @@ onBeforeUnmount(() => {
     <header class="chat-header">
       <div class="chat-brand">
         <span class="chat-title">旅行助手</span>
+
+
       </div>
 
       <!--
@@ -391,10 +848,76 @@ onBeforeUnmount(() => {
           @dial="dialCall"
           @close="callStage = 'idle'"
         />
+
+        <MemoryPanel
+          v-if="showMemory"
+          :initial-conversation="currentConversationId"
+          @close="showMemory = false"
+        />
+
+        <!-- 公告：管理员在后台发的通知 -->
+        <AnnouncementPanel v-if="showNotice" @close="showNotice = false" />
       </div>
 
       <div class="chat-user-box">
         <span class="chat-user">{{ props.username }}</span>
+
+        <!-- 公告：管理员发的通知，有没看过的就亮个小红点 -->
+        <button
+          class="notice-btn"
+          :class="{ 'notice-btn--unread': noticeUnread > 0 }"
+          type="button"
+          :title="noticeUnread > 0 ? `公告：${noticeUnread} 条没看过` : '公告'"
+          @click="showNotice = true"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <path
+              d="M12 5.5c-2.4 0-4.3 1.9-4.3 4.3v3.1l-1.4 2.3c-.2.4.1.9.5.9h10.4c.4 0 .7-.5.5-.9l-1.4-2.3V9.8c0-2.4-1.9-4.3-4.3-4.3Z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M10.3 18.2a1.8 1.8 0 0 0 3.4 0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span>公告</span>
+          <span v-if="noticeUnread > 0" class="notice-btn__dot">
+            {{ noticeUnread > 9 ? '9+' : noticeUnread }}
+          </span>
+        </button>
+
+        <!-- 音乐：上传自己的歌（只在本机临时目录，退出登录清空） -->
+        <MusicPlayer :volume="bgmVolume" :muted="muted" @play="pauseBgm" />
+
+        <!-- 记忆：点开看芙芙记住了什么 -->
+        <button
+          class="mem-btn"
+          type="button"
+          title="记忆：芙芙记住的事"
+          @click="showMemory = true"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <path
+              d="M12 4.2c-3 0-5.3 2.1-5.3 4.9 0 1.2-.5 1.8-1.2 2.6-.5.6-.2 1.5.6 1.7.6.2 1 .4 1.1 1.1.3 1.9 2.1 3.3 4.4 3.3 1.3 0 2.4-.4 3.2-1.1"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
+            <circle cx="7.1" cy="9.4" r="1" fill="currentColor" />
+            <circle cx="10.2" cy="7.1" r="1" fill="currentColor" />
+            <circle cx="13.8" cy="7.1" r="1" fill="currentColor" />
+            <circle cx="16.9" cy="9.4" r="1" fill="currentColor" />
+          </svg>
+          <span>记忆</span>
+        </button>
+
 
         <!-- 右上角工具区：音量（点开才调） + 设置（填 API Key） -->
         <div class="header-tools">
@@ -500,7 +1023,14 @@ onBeforeUnmount(() => {
            并给 EyeBlink 组填上 ParamEyeLOpen / ParamEyeROpen，所以现在会自动待机动画 + 眨眼。
            通过 ref 调用：playMotion('变芒')、setExpression('哭')、setMouthOpen(0~1)。 -->
       <section class="chat-stage">
-        <Live2DStage ref="live2dRef" model-url="/芙宁娜（vts）/芙宁娜.model3.json" />
+        <Live2DStage
+          ref="live2dRef"
+          model-url="/芙宁娜（vts）/芙宁娜.model3.json"
+          :follow-mouse="!aiMode"
+        />
+
+        <!-- 左上角时钟：时:分 + 小秒 + 日期 -->
+        <ClockWidget />
 
         <!-- ====== Live2D 动作控制面板（左下角） ====== -->
         <div class="live2d-actions" :class="{ 'live2d-actions--open': showActions }">
@@ -515,12 +1045,20 @@ onBeforeUnmount(() => {
 
           <!-- 弹出面板：动作 + 表情按钮列表 -->
           <div class="live2d-actions__panel">
+            <!-- AI 控制中：手动按钮全部锁掉，避免和大模型抢着改表情 -->
+            <p v-if="aiMode" class="live2d-actions__locked">
+              AI 控制中 · 手动动作/表情已锁定；60 秒没动静她会自己换个表情。点下面的按钮可退出
+            </p>
+
             <!-- 动作分组 -->
             <span class="live2d-actions__label">动作</span>
             <button
               v-for="m in motions"
               :key="m.group"
               class="live2d-actions__btn"
+              type="button"
+              :disabled="aiMode"
+              :title="aiMode ? 'AI 控制中，动作由芙芙自己决定' : ''"
               @click="triggerMotion(m.group, m.index)"
             >
               {{ m.label }}
@@ -536,6 +1074,9 @@ onBeforeUnmount(() => {
                 v-for="name in expressions"
                 :key="name"
                 class="live2d-actions__btn"
+                type="button"
+                :disabled="aiMode"
+                :title="aiMode ? 'AI 控制中，表情由芙芙自己决定' : ''"
                 @click="triggerExpression(name)"
               >
                 {{ name }}
@@ -545,8 +1086,16 @@ onBeforeUnmount(() => {
             <!-- 分隔线 -->
             <div class="live2d-actions__divider"></div>
 
-            <!-- AI 控制按钮（占位，以后再接入） -->
-            <button class="live2d-actions__btn live2d-actions__btn--ai" disabled title="AI 自动操控（即将上线）">
+            <!-- AI 控制：开着时按钮高亮，每轮回复结束由大模型挑表情/动作 -->
+            <button
+              class="live2d-actions__btn live2d-actions__btn--ai"
+              :class="{ 'live2d-actions__btn--on': aiMode }"
+              type="button"
+              :title="aiMode
+                ? `AI 控制中${actor.lastAction.value?.reason ? '：' + actor.lastAction.value.reason : ''}（点一下关掉）`
+                : 'AI 控制：芙芙结合当前对话自己换表情/动作，眼睛不再跟着鼠标，挂机一分钟也会自己换一次'"
+              @click="toggleAiMode"
+            >
               <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
                 <path
                   d="M12 2a2.5 2.5 0 0 0-2.5 2.5v.5H7a3 3 0 0 0-3 3v9a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V8a3 3 0 0 0-3-3h-2.5v-.5A2.5 2.5 0 0 0 12 2z"
@@ -557,7 +1106,7 @@ onBeforeUnmount(() => {
                   d="M8.5 15.5c1.2 1.8 3.7 2.2 5.5.8"
                   stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" />
               </svg>
-              AI 控制
+              AI 控制{{ aiMode ? ' · 开' : '' }}
             </button>
           </div>
         </div>
@@ -566,10 +1115,75 @@ onBeforeUnmount(() => {
 
       <!-- 红框：聊天面板 = 消息列表 + 输入框，上下拼起来 -->
       <section class="chat-panel">
+        <!-- 对话切换：多条对话，各自一份记忆 -->
+        <div class="conv-wrap">
+          <button
+            class="conv-btn"
+            :class="{ 'conv-btn--on': convOpen }"
+            type="button"
+            :title="`当前对话：${currentTitle}`"
+            @click="convOpen = !convOpen"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path
+                d="M4.5 5.5h15v10h-8.2L7 19v-3.5H4.5z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="conv-btn__title">{{ currentTitle }}</span>
+            <span class="conv-btn__caret">▾</span>
+          </button>
+
+          <div v-if="convOpen" class="conv-menu">
+            <div class="conv-menu__head">
+              <span>对话 · {{ conversations.length }}</span>
+              <button class="conv-new" type="button" @click="newConv">＋ 新建</button>
+            </div>
+
+            <ul class="conv-list">
+              <li
+                v-for="c in conversations"
+                :key="c.id"
+                class="conv-item"
+                :class="{ 'conv-item--on': c.id === currentConversationId }"
+              >
+                <button class="conv-item__pick" type="button" @click="switchConv(c.id)">
+                  <span class="conv-item__title">{{ c.title }}</span>
+                  <span class="conv-item__meta">{{ c.summary ? '有记忆' : '暂无记忆' }}</span>
+                </button>
+                <button class="conv-item__act" type="button" title="重命名" @click.stop="startRename(c.id)">✎</button>
+                <button
+                  class="conv-item__act conv-item__act--del"
+                  type="button"
+                  title="删除"
+                  @click.stop="removeConv(c.id)"
+                >✕</button>
+              </li>
+            </ul>
+
+            <div v-if="renamingId !== null" class="conv-rename">
+              <input
+                v-model="renameDraft"
+                maxlength="40"
+                placeholder="给这个对话起个名字"
+                @keyup.enter="commitRename"
+              />
+              <button type="button" class="conv-rename__ok" @click="commitRename">保存</button>
+              <button type="button" class="conv-rename__no" @click="renamingId = null">取消</button>
+            </div>
+
+            <p class="conv-menu__tip">换对话不会打断正在生成的回复，但会挂断语音。</p>
+          </div>
+        </div>
         <MessageList
         :messages="messages"
         :is-typing="isTyping"
         :is-thinking="isThinking || callPending"
+        :tool-hint="toolHint"
+        :suppress-animation="suppressBubble"
       />
         <MessageInput :disabled="isTyping" @send="sendMessage" />
       </section>
@@ -577,6 +1191,17 @@ onBeforeUnmount(() => {
 
     <!-- 行程面板：填出发地/目的地，用高德地图画路线 -->
     <RoutePlanner v-if="showRoute" @close="showRoute = false" />
+
+    <!-- 观看 vlog：5 条 B 站视频卡片；点卡片 → 右下角浮窗播放器 -->
+    <VlogPanel
+      v-if="showVlog"
+      :initial-region="weatherCity"
+      @close="showVlog = false"
+      @open="openVideo"
+    />
+    <!-- 浮窗播放器：不放在 VlogPanel 里面，这样关掉面板视频还能继续看 -->
+    <VideoFloat v-if="activeVideo" :video="activeVideo" @close="activeVideo = null" />
+
     <PhoneCall
       v-if="showCall"
       ref="phoneRef"
@@ -679,6 +1304,68 @@ onBeforeUnmount(() => {
 .nav-btn__text { white-space: nowrap; }
 
 /* ---- 右侧用户区 ---- */
+.mem-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(200, 240, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #eaf8ff;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.mem-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(220, 250, 255, 0.6);
+}
+
+/* 公告按钮：和「记忆」同一套外观，右边跟一个未读数小圆点 */
+.notice-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(200, 240, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #eaf8ff;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.notice-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(220, 250, 255, 0.6);
+}
+
+.notice-btn--unread {
+  border-color: rgba(255, 176, 190, 0.75);
+}
+
+.notice-btn__dot {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #ff6b81;
+  color: #fff;
+  font-size: 0.6rem;
+  line-height: 15px;
+  text-align: center;
+  box-shadow: 0 0 0 2px rgba(40, 88, 108, 0.9);
+}
+
 .chat-user-box {
   margin-left: auto;       /* 推到最右边 */
   display: flex;
@@ -849,6 +1536,20 @@ onBeforeUnmount(() => {
   background: rgba(255, 253, 248, 0.18);
   border-color: rgba(255, 253, 248, 0.75);
 }
+/* AI 控制模式下手动按钮锁掉 */
+.live2d-actions__btn:disabled,
+.live2d-actions__btn:disabled:hover {
+  opacity: 0.32;
+  background: transparent;
+  border-color: rgba(255, 253, 248, 0.45);
+  cursor: not-allowed;
+}
+.live2d-actions__locked {
+  margin: 0 0 2px;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: rgba(255, 253, 248, 0.72);
+}
 
 /* 分隔线 */
 .live2d-actions__divider {
@@ -857,22 +1558,29 @@ onBeforeUnmount(() => {
   background: rgba(255, 253, 248, 0.25);
 }
 
-/* AI 控制按钮（占位，disabled） */
+/* AI 控制按钮：关=虚线描边，开=实心高亮 */
 .live2d-actions__btn--ai {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  opacity: 0.5;
-  cursor: not-allowed;
   border-style: dashed;
 }
 .live2d-actions__btn--ai:hover {
-  background: transparent;
-  border-color: rgba(255, 253, 248, 0.45);
+  border-color: rgba(255, 253, 248, 0.75);
+}
+.live2d-actions__btn--on,
+.live2d-actions__btn--on:hover {
+  background: #fffdf8;
+  border-style: solid;
+  border-color: #fffdf8;
+  color: #1f3b3a;
+  font-weight: 600;
+  box-shadow: 0 0 0 3px rgba(255, 253, 248, 0.2);
 }
 
 /* ---- 红框：聊天面板 ---- */
 .chat-panel {
+  position: relative;      /* 对话按钮定位在面板右上角 */
   flex: 1;
   min-width: 0;
   display: flex;
@@ -890,4 +1598,205 @@ onBeforeUnmount(() => {
   .chat-stage { flex: 1; min-height: 300px; }
   .chat-nav { margin-left: 20px; }
 }
+
+/* ---------------- 对话切换（多对话 + 每对话一份记忆） ---------------- */
+.conv-wrap {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 6;
+}
+
+.conv-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(150, 230, 255, 0.28);
+  background: rgba(6, 34, 44, 0.55);
+  color: #d8f6ff;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.conv-btn:hover,
+.conv-btn--on {
+  border-color: rgba(150, 230, 255, 0.6);
+  background: rgba(12, 58, 70, 0.75);
+}
+
+.conv-btn__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-btn__caret {
+  opacity: 0.7;
+  font-size: 0.7rem;
+}
+
+.conv-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  left: auto;
+  width: 320px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(150, 230, 255, 0.22);
+  background: #0a262b;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.conv-menu__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 0.75rem;
+  color: #9fd8e6;
+}
+
+.conv-new {
+  border: 1px solid rgba(150, 230, 255, 0.35);
+  background: transparent;
+  color: #8ff0c8;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.conv-new:hover {
+  background: rgba(143, 240, 200, 0.12);
+}
+
+.conv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conv-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 10px;
+  padding: 2px 2px 2px 0;
+}
+
+.conv-item--on {
+  background: rgba(143, 240, 200, 0.1);
+}
+
+.conv-item__pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #dff6fb;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conv-item__pick:hover {
+  background: rgba(150, 230, 255, 0.08);
+}
+
+.conv-item__title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+}
+
+.conv-item__meta {
+  font-size: 0.68rem;
+  color: #7fb3c2;
+}
+
+.conv-item__act {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8fc6d4;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.conv-item__act:hover {
+  background: rgba(150, 230, 255, 0.12);
+  color: #dff6fb;
+}
+
+.conv-item__act--del:hover {
+  background: rgba(255, 110, 120, 0.16);
+  color: #ffb3b8;
+}
+
+.conv-rename {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.conv-rename input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(150, 230, 255, 0.28);
+  background: rgba(4, 24, 30, 0.9);
+  color: #e6fbff;
+  font-size: 0.78rem;
+  outline: none;
+}
+
+.conv-rename input:focus {
+  border-color: rgba(143, 240, 200, 0.7);
+}
+
+.conv-rename__ok,
+.conv-rename__no {
+  border-radius: 8px;
+  border: 1px solid rgba(150, 230, 255, 0.28);
+  background: transparent;
+  color: #cfeff7;
+  font-size: 0.74rem;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.conv-rename__ok {
+  border-color: rgba(143, 240, 200, 0.5);
+  color: #8ff0c8;
+}
+
+.conv-menu__tip {
+  margin: 8px 2px 0;
+  font-size: 0.68rem;
+  color: #7fb3c2;
+  line-height: 1.5;
+}
+
 </style>

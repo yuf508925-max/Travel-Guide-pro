@@ -19,9 +19,9 @@ export interface RouteSearch {
 
 export const TRAVEL_MODES = ['driving', 'walking', 'transit'] as const
 
-export async function fetchLastSearch(): Promise<RouteSearch | null> {
+export async function fetchLastSearch(kind = 'route'): Promise<RouteSearch | null> {
   try {
-    const res = await fetch('/api/routes/last')
+    const res = await fetch(`/api/routes/last?kind=${kind}`)
     if (!res.ok) return null
     const data = (await res.json()) as { found?: boolean; search?: RouteSearch }
     return data.found && data.search ? data.search : null
@@ -30,10 +30,10 @@ export async function fetchLastSearch(): Promise<RouteSearch | null> {
   }
 }
 
-/** 取最近 N 条（给输入框的下拉建议用） */
-export async function fetchRecentSearches(limit = 20): Promise<RouteSearch[]> {
+/** 取最近 N 条（给输入框的下拉建议用）；kind=vlog 取的是「观看 vlog」的搜索词 */
+export async function fetchRecentSearches(limit = 20, kind = 'route'): Promise<RouteSearch[]> {
   try {
-    const res = await fetch(`/api/routes?limit=${limit}`)
+    const res = await fetch(`/api/routes?limit=${limit}&kind=${kind}`)
     if (!res.ok) return []
     const data = (await res.json()) as { searches?: RouteSearch[] }
     return Array.isArray(data.searches) ? data.searches : []
@@ -67,5 +67,39 @@ export async function saveRouteSearch(search: RouteSearch): Promise<void> {
     })
   } catch {
     // 记录失败就算了，下次再存
+  }
+}
+
+// ---------------------------------------------------------------------
+// 「观看 vlog」的搜索词：和行程记录存在同一张 route_searches 表里（kind=vlog），
+// 关键词放在 origin 字段。这样两边共用一套存储和「最近搜过」的下拉。
+// ---------------------------------------------------------------------
+
+/** 最近搜过的关键词（给 vlog 搜索框下拉用） */
+export async function fetchRecentVlogSearches(limit = 8): Promise<RouteSearch[]> {
+  return fetchRecentSearches(limit, 'vlog')
+}
+
+/** 存一次 vlog 搜索词（失败静默，不影响搜索本身） */
+export async function saveVlogSearch(keyword: string): Promise<void> {
+  return saveSearchHistory('vlog', keyword)
+}
+
+/**
+ * 存一次搜索词 / 地名，按 kind 分类存进同一张 route_searches 表（关键词放 origin）。
+ * kind：route=行程、vlog=看视频的关键词、vlog-region=看视频的地区、
+ *       weather=天气里查过的城市、memory=记忆面板搜过的词
+ */
+export async function saveSearchHistory(kind: string, keyword: string): Promise<void> {
+  const word = keyword.trim()
+  if (!word) return
+  try {
+    await fetch('/api/routes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, origin: word, city: '', destination: '', mode: '' }),
+    })
+  } catch {
+    // 记不上就算了
   }
 }

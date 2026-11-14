@@ -20,11 +20,17 @@ const props = withDefaults(
     isTyping?: boolean
     // 模型还在思考（正文一个字都没出来）时显示"芙芙正在思考…"
     isThinking?: boolean
+    // 正在调工具时的一句提示（"正在查天气…"），有它就顶掉"正在思考"
+    toolHint?: string
+    // 切对话后的一整屏文字：全部直接显示，连最后一条也不要冒泡
+    suppressAnimation?: boolean
   }>(),
   {
     messages: () => [],
     isTyping: false,
     isThinking: false,
+    toolHint: '',
+    suppressAnimation: false,
   }
 )
 
@@ -76,8 +82,12 @@ watch(
       <img v-if="item.msg.role === 'ai'" class="msg-avatar" src="/1790414746809.png" alt="" />
 
       <div class="msg-bubble" :class="item.msg.role === 'user' ? 'msg-bubble--user' : 'msg-bubble--ai'">
-        <!-- 每个字自己蹦出来（英文按整词冒，不会把单词拆断） -->
-        <BubbleText :text="item.msg.text" />
+        <!-- 只有最新那条做「冒泡」；历史消息直接显示，
+             否则切对话时整屏文字会把动画重播一遍，又卡又闪 -->
+        <BubbleText
+          :text="item.msg.text"
+          :animated="!props.suppressAnimation && item.index >= props.messages.length - 1"
+        />
       </div>
     </div>
     <!--
@@ -88,7 +98,7 @@ watch(
     <div v-if="props.isThinking" class="msg-row msg-row--ai">
       <img class="msg-avatar" src="/1790414746809.png" alt="" />
       <div class="msg-bubble msg-bubble--ai msg-bubble--thinking">
-        芙芙正在思考
+        {{ props.toolHint || '芙芙正在思考' }}
         <span class="msg-dots"><i></i><i></i><i></i></span>
       </div>
     </div>

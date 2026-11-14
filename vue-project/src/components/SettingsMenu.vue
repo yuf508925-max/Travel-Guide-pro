@@ -102,6 +102,39 @@ async function refresh() {
   await loadTts()
 }
 
+// ---------------- 意见反馈（发给管理员） ----------------
+const feedbackText = ref('')
+const feedbackSending = ref(false)
+const feedbackHint = ref('')
+
+async function sendFeedback() {
+  const text = feedbackText.value.trim().slice(0, 2000)
+  if (text.length < 4) {
+    feedbackHint.value = '再多写几个字吧（至少 4 个字）'
+    return
+  }
+
+  feedbackSending.value = true
+  feedbackHint.value = ''
+  try {
+    const res = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text }),
+    })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) {
+      throw new Error(data?.detail ? String(data.detail) : `HTTP ${res.status}`)
+    }
+    feedbackText.value = ''
+    feedbackHint.value = '已发送给管理员，谢谢！'
+  } catch (err) {
+    feedbackHint.value = err instanceof Error ? err.message : '发送失败'
+  } finally {
+    feedbackSending.value = false
+  }
+}
+
 // ---------------- 语音（Qwen-TTS） ----------------
 const ttsKeyDraft = ref('')
 const ttsModel = ref('qwen3-tts-flash')
@@ -395,14 +428,6 @@ function onKeydown(event: KeyboardEvent) {
               {{ ttsHasKey ? '已配置' : '未配置' }}
             </span>
           </p>
-          <p class="map-box__desc">
-            优先用本地 GPT-SoVITS 的芙宁娜音色；本地服务没起来时，才会退回云端的 Qwen-TTS。
-          </p>
-          <p v-if="ttsLocal" class="tts-local">
-            本地音色：<strong>Furina</strong>
-            · 服务 {{ ttsLocal.url }}
-            · 参考音频{{ ttsLocal.ready ? '已就绪' : '缺失（需要 models/Furina_GPT_SoVITS/ref.wav）' }}
-          </p>
           <input
             v-model="ttsKeyDraft"
             class="menu-input menu-input--wide"
@@ -425,7 +450,32 @@ function onKeydown(event: KeyboardEvent) {
             {{ ttsSaving ? '保存中…' : '保存语音 Key' }}
           </button>
         </section>
-                <p v-if="success" class="success-hint">✅ {{ success }}</p>
+
+        <!-- 意见反馈：直接写进后台的「用户反馈」消息窗口 -->
+        <section class="map-box">
+          <p class="map-box__title">意见反馈</p>
+          <p class="map-box__desc">
+            遇到问题、想要的功能，都可以写在这里，管理员会在后台看到。
+          </p>
+          <textarea
+            v-model="feedbackText"
+            class="menu-input menu-input--wide feedback-box"
+            rows="3"
+            maxlength="2000"
+            placeholder="比如：行程里想显示高速费 / 语音有点慢 / 希望支持导出…"
+          />
+          <button
+            class="menu-save"
+            type="button"
+            :disabled="feedbackSending"
+            @click="sendFeedback"
+          >
+            {{ feedbackSending ? '发送中…' : '发送给管理员' }}
+          </button>
+          <p v-if="feedbackHint" class="feedback-hint">{{ feedbackHint }}</p>
+        </section>
+
+        <p v-if="success" class="success-hint">✅ {{ success }}</p>
         <p v-if="tip" class="menu-tip">{{ tip }}</p>
         <p v-if="error" class="menu-error">{{ error }}</p>
 
@@ -874,6 +924,21 @@ function onKeydown(event: KeyboardEvent) {
   background: rgba(255, 253, 248, 0.12);
   color: rgba(255, 253, 248, 0.55);
 }
+.feedback-box {
+  margin-top: 8px;
+  resize: vertical;
+  min-height: 68px;
+  line-height: 1.55;
+  font-family: inherit;
+  padding: 9px 11px;
+}
+
+.feedback-hint {
+  margin: 8px 2px 0;
+  font-size: 0.76rem;
+  color: #9ff0dc;
+}
+
 .tts-local {
   margin: 0 0 2px;
   font-size: 0.66rem;
