@@ -114,7 +114,7 @@ app.include_router(music.router)    # /api/music/*       上传的音乐（临�
 app.include_router(notice.router)  # /api/notices      公告（后台发布，前台看）
 app.include_router(providers.router) # /api/providers     多套 Key / 多个模型 / 切换
 app.include_router(routes.router)    # /api/routes        行程面板的搜索记录（按账号隔离）
-app.include_router(map_settings.router)  # /api/map      每个账号自己的高德 Key
+app.include_router(map_settings.router)  # /api/map      管理员配的高德 Key（全局一份）
 app.include_router(trains.router)    # /api/trains        动车班次（12306 余票）
 app.include_router(live2d.router)    # /api/live2d/*      AI 控制：大模型挑表情/动作
 app.include_router(vlog.router)      # /api/vlog/*        「观看 vlog」：B站旅行视频

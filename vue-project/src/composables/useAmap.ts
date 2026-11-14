@@ -1,8 +1,8 @@
 // =====================================================================
 // useAmap —— 按需加载高德地图 JS API（2.0）
 // ---------------------------------------------------------------------
-// Key 从哪来：后端内置（server/config.py 的 AMAP_JS_KEY / AMAP_SECURITY_CODE），
-//   前端通过 GET /api/map 取一次。用户不需要填，也没有输入框。
+// Key 从哪来：管理员在后台「地图 Key」里配，存后端 app_settings 表，
+//   前端通过 GET /api/map 取一次。普通用户不用填，也没有输入框。
 //   换 Key 只改后端配置，前端不用动。
 //
 // 为什么放后端而不写死在前端：这样换 Key 不用重新构建前端；
@@ -71,7 +71,7 @@ export async function loadAmap(): Promise<any> {
 
   const key = amapKey.value.trim()
   if (!key) {
-    throw new Error('后端还没配置高德地图 Key（server/config.py 的 AMAP_JS_KEY）')
+    throw new Error('管理员还没在后台配置高德地图 Key（后台 → 地图 Key）')
   }
 
   if (amapSecurityCode.value.trim()) {

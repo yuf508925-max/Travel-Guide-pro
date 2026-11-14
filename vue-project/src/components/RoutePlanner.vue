@@ -764,8 +764,8 @@ onBeforeUnmount(() => {
       <!-- ---- 配置没读到的兜底（正常情况下不会出现）---- -->
       <div v-else-if="needKey" class="key-form">
         <p class="key-form__intro">
-          地图配置没读到。Key 是固定在后端的（<strong>server/config.py</strong> 的
-          AMAP_JS_KEY），刷新页面再试；如果一直这样，检查后端有没有启动。
+          地图配置没读到。高德地图 Key 由管理员在<strong>后台 → 地图 Key</strong>里填，
+          刷新页面再试；如果一直这样，先确认管理员已经填过 Key，再检查后端有没有启动。
         </p>
       </div>
 

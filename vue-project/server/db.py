@@ -8,7 +8,7 @@
 #                    其中 is_active=1 的那套是聊天当前使用的
 #     route_searches 搜索记录（kind=route 行程：城市/出发地/目的地/方式；kind=vlog 看视频的关键词）,
 #                    每个账号只保留最近 20 条，面板打开时回填最近一条
-#     user_map_settings 高德地图 Key / 安全密钥，一个账号一行
+#     user_map_settings 高德地图 Key / 安全密钥，一个账号一行（已废弃，见 app_settings）
 #     user_tts_settings 语音合成（Qwen-TTS）的 Key / 模型 / 音色，一个账号一行
 #     usage_events   调用打点（visit=页面访问 / amap=高德接口 / chat、tts、trains 等），
 #                    只保留最近一年
@@ -16,6 +16,7 @@
 #     announcements  公告（后台发布，前台顶栏「公告」里看）
 #     music_tracks   用户上传的音乐（文件在 server/tmp_music/<会话 token>/，
 #                    表里记文件名 / 大小 / 排列位置；退出登录或会话过期就一起删）
+#     app_settings   全站配置（key/value），目前放管理员配置的高德地图 Key
 # =====================================================================
 
 import sqlite3
@@ -244,6 +245,21 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_notices_time ON announcements(pinned DESC, id DESC)"
+        )
+
+        # 全站配置（管理员在后台改，全局一份）
+        #   现在只放高德地图 Web端(JS API) 的 Key 与安全密钥：
+        #   它们最终会出现在浏览器加载的脚本地址里，本来就是公开值，
+        #   所以由管理员统一配置、所有登录用户 GET /api/map 取同一份。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL DEFAULT '',
+                updated_by TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
         )
 
         # 行程搜索记录：按 user_id 隔离，一个账号只看得到自己的

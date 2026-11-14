@@ -182,7 +182,7 @@ const filteredKeys = computed(() => {
 // ---------------------------------------------------------------------
 // 页面切换：数据总览 / 模型库
 // ---------------------------------------------------------------------
-type AdminPage = 'dashboard' | 'models' | 'notice'
+type AdminPage = 'dashboard' | 'models' | 'notice' | 'map'
 const adminPage = ref<AdminPage>('dashboard')
 
 interface ModelRow {
@@ -213,6 +213,7 @@ function switchPage(next: AdminPage) {
   adminPage.value = next
   if (next === 'models') void loadModels()
   if (next === 'notice') void loadNotices(true)
+  if (next === 'map') void loadMapConfig()
 }
 
 async function addModel() {
@@ -310,6 +311,73 @@ async function removeNotice(item: { id: number; title: string }) {
     say('已删除')
   } catch (err) {
     say(err instanceof Error ? err.message : '删除失败')
+  }
+}
+
+// ---------------------------------------------------------------------
+// 地图 Key：高德「Web端 (JS API)」的 Key + 安全密钥，全局一份
+// 前端所有用户通过 GET /api/map 读同一份；这里只有管理员能改。
+// ---------------------------------------------------------------------
+interface MapConfig {
+  amap_key: string
+  security_code: string
+  updated_by: string
+  updated_at: string
+  configured: boolean
+}
+
+const mapConfig = ref<MapConfig>({
+  amap_key: '',
+  security_code: '',
+  updated_by: '',
+  updated_at: '',
+  configured: false,
+})
+const mapSaving = ref(false)
+
+async function loadMapConfig() {
+  try {
+    mapConfig.value = await api<MapConfig>('/api/admin/map')
+  } catch (err) {
+    say(err instanceof Error ? err.message : '读取地图配置失败')
+  }
+}
+
+async function saveMapConfig() {
+  const amapKey = mapConfig.value.amap_key.trim()
+  if (!amapKey) {
+    say('高德地图 Key 不能为空')
+    return
+  }
+  mapSaving.value = true
+  try {
+    await api('/api/admin/map', {
+      method: 'PUT',
+      body: JSON.stringify({
+        amap_key: amapKey,
+        security_code: mapConfig.value.security_code.trim(),
+      }),
+    })
+    say('地图 Key 已保存，所有用户刷新页面后生效')
+    await loadMapConfig()
+  } catch (err) {
+    say(err instanceof Error ? err.message : '保存失败')
+  } finally {
+    mapSaving.value = false
+  }
+}
+
+async function clearMapConfig() {
+  if (!window.confirm('清空之后行程面板会用不了（前端会提示「管理员还没配置」），确定清空？')) return
+  mapSaving.value = true
+  try {
+    await api('/api/admin/map', { method: 'DELETE' })
+    say('已清空地图 Key')
+    await loadMapConfig()
+  } catch (err) {
+    say(err instanceof Error ? err.message : '清空失败')
+  } finally {
+    mapSaving.value = false
   }
 }
 
@@ -738,6 +806,13 @@ onBeforeUnmount(() => {
           >
             发布公告
           </button>
+          <button
+            class="admin-tab"
+            :class="{ 'admin-tab--on': adminPage === 'map' }"
+            @click="switchPage('map')"
+          >
+            地图 Key
+          </button>
         </nav>
       </div>
 
@@ -1094,7 +1169,7 @@ onBeforeUnmount(() => {
       </template>
 
       <!-- 发布公告：写一条，所有登录用户在前台顶栏「公告」里看到 -->
-      <template v-else>
+      <template v-else-if="adminPage === 'notice'">
         <section class="admin-panel admin-notice">
           <div class="admin-panel__head">
             <h2>
@@ -1166,6 +1241,67 @@ onBeforeUnmount(() => {
 
           <p class="admin-empty">
             公告对所有登录用户可见；前台顶栏「公告」里按「置顶 → 最新」排。已读状态记在各自浏览器里，不用你管。
+          </p>
+        </section>
+      </template>
+
+      <!-- 地图 Key：高德「Web端 (JS API)」的 Key + 安全密钥，全局一份 -->
+      <template v-else>
+        <section class="admin-panel admin-map">
+          <div class="admin-panel__head">
+            <h2>
+              高德地图 Key
+              <span class="admin-badge" :class="{ 'admin-badge--warn': !mapConfig.configured }">
+                {{ mapConfig.configured ? '已配置' : '未配置' }}
+              </span>
+            </h2>
+          </div>
+
+          <form class="map-form" @submit.prevent="saveMapConfig">
+            <label class="map-form__row">
+              <span class="map-form__label">Key</span>
+              <input
+                v-model="mapConfig.amap_key"
+                class="admin-search map-form__input"
+                placeholder="高德控制台 → 应用管理 → 我的应用 → Web端(JS API) 的 Key"
+                maxlength="128"
+                autocomplete="off"
+              />
+            </label>
+
+            <label class="map-form__row">
+              <span class="map-form__label">安全密钥</span>
+              <input
+                v-model="mapConfig.security_code"
+                class="admin-search map-form__input"
+                placeholder="同一应用的安全密钥 securityJsCode（2021-12-02 之后申请的 Key 必须带）"
+                maxlength="128"
+                autocomplete="off"
+              />
+            </label>
+
+            <div class="map-form__foot">
+              <button class="admin-op admin-op--primary" type="submit" :disabled="mapSaving">
+                {{ mapSaving ? '保存中…' : '保存' }}
+              </button>
+              <button
+                class="admin-op admin-op--danger"
+                type="button"
+                :disabled="mapSaving || !mapConfig.configured"
+                @click="clearMapConfig"
+              >
+                清空
+              </button>
+              <span v-if="mapConfig.updated_at" class="map-form__meta">
+                最近修改：{{ mapConfig.updated_by || '—' }} · {{ shortTime(mapConfig.updated_at) }}
+              </span>
+            </div>
+          </form>
+
+          <p class="admin-empty">
+            这份 Key 全站共用：所有登录用户通过 <code>GET /api/map</code> 读到同一份，用来加载高德 JS API（行程规划的地图、路线、地点搜索）。
+            改完不用重启后端，前端刷新页面即可生效。<br />
+            注意 Key 类型必须是 <strong>Web端(JS API)</strong>，并在高德控制台把本站域名加进「域名白名单」；换成「Web服务」类型的 Key 会报 <code>INVALID_USER_SCODE</code>。
           </p>
         </section>
       </template>
@@ -1815,6 +1951,53 @@ onBeforeUnmount(() => {
   max-width: 320px;
   color: #9fc7c2;
   font-size: 0.74rem;
+}
+
+/* ---- 地图 Key ---- */
+.map-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 6px 0 16px;
+  max-width: 720px;
+}
+
+.map-form__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.map-form__label {
+  flex: none;
+  width: 68px;
+  font-size: 0.76rem;
+  color: #9fc7c2;
+}
+
+.map-form__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: 0.01em;
+}
+
+.map-form__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-left: 80px;
+}
+
+.map-form__meta {
+  font-size: 0.72rem;
+  color: #7ea8a3;
+}
+
+.admin-badge--warn {
+  border-color: rgba(255, 160, 120, 0.55);
+  color: #ffb59a;
 }
 
 .admin-op--primary {
