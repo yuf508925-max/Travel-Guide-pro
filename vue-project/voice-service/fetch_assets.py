@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
-"""fetch_assets.py —— 一键补装语音服务需要的公开资源（不含芙宁娜音色权重）
+"""fetch_assets.py —— 一键补装语音服务需要的资源
 
 会用到的下载源（国内可直连）：
-  * GPT-SoVITS 底模   https://hf-mirror.com/lj1995/GPT-SoVITS
-  * G2PW 多音字模型    https://www.modelscope.cn/models/kamiorinn/g2pw
-  * ffmpeg            https://www.gyan.dev/ffmpeg/builds/
+  * GPT-SoVITS 底模      https://hf-mirror.com/lj1995/GPT-SoVITS
+  * G2PW 多音字模型      https://www.modelscope.cn/models/kamiorinn/g2pw
+  * 芙宁娜音色权重       https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS
+  * ffmpeg              https://www.gyan.dev/ffmpeg/builds/（失败自动换 GitHub BtbN 镜像）
 
 用法（在项目根目录 vue-project 或任意目录执行都行）：
-    python voice-service\\fetch_assets.py                 # 下载全部公开资源（约 1.75 GB）
+    python voice-service\\fetch_assets.py                 # 下载全部资源（约 2.1 GB）
     python voice-service\\fetch_assets.py --with-v2-base   # 额外下载 v2 官方底模（约 0.35 GB，可跳过）
-    python voice-service\\fetch_assets.py --skip-ffmpeg --skip-g2pw
+    python voice-service\\fetch_assets.py --skip-ffmpeg --skip-g2pw --skip-furina
     python voice-service\\fetch_assets.py --dry-run        # 只打印将下载的文件
 
 已存在的文件会跳过；下载中断后会从 .part 文件续传。
-芙宁娜音色权重（Funina-e15.ckpt / Funina_e8_s464.pth）没有公开地址，脚本最后会提示手动放置。
+参考音频 ref.wav 已经随仓库提供，脚本不下载。
 """
 
 from __future__ import annotations
@@ -58,7 +59,13 @@ HF_V2_FILES = [
 ]
 
 G2PW_URL = "https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip"
-FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+# ffmpeg 有多个源，按顺序尝试：hf-mirror 国内最快，gyan.dev / GitHub BtbN 作为备用
+FFMPEG_URLS = [
+    "https://hf-mirror.com/neo7team/ffmpeg/resolve/main/ffmpeg.zip?download=true",
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
+]
+FFMPEG_URL = FFMPEG_URLS[0]
 
 # 芙宁娜音色权重（作者自训，已传到 ModelScope）
 FURINA_DIR = ROOT / "models" / "Furina_GPT_SoVITS"
@@ -184,28 +191,60 @@ def fetch_g2pw() -> None:
 
 
 def fetch_ffmpeg() -> None:
-    print(f"\n[4/4] ffmpeg -> {FFMPEG_DIR}  (源: gyan.dev)")
+    print(f"\n[4/4] ffmpeg -> {FFMPEG_DIR}")
     if (FFMPEG_DIR / "ffmpeg.exe").exists() and (FFMPEG_DIR / "ffprobe.exe").exists():
         print("   跳过（已存在）")
         return
 
     zip_path = VOICE / "_ffmpeg.zip"
-    download(FFMPEG_URL, zip_path)
+    last_error: object = None
+    for url in FFMPEG_URLS:
+        host = url.split("/")[2]
+        print(f"   源: {host}")
+        try:
+            download(url, zip_path)
+            break
+        except SystemExit as exc:  # 这个源失败了，换下一个
+            last_error = exc
+            # 不同源的安装包内容不同，续传会拼坏，所以清掉半截文件
+            zip_path.unlink(missing_ok=True)
+            zip_path.with_name(zip_path.name + ".part").unlink(missing_ok=True)
+            print(f"   {host} 不可用，换下一个源…")
+    else:
+        raise SystemExit(
+            "ffmpeg 下载失败，所有源都试过了。\n"
+            "可以手动下载后解压：\n"
+            "  1) https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip\n"
+            "  2) https://github.com/BtbN/FFmpeg-Builds/releases （win64-gpl 版本）\n"
+            "  把包里的 bin\\ffmpeg.exe、bin\\ffprobe.exe 放到 voice-service\\ffmpeg-bin\\ 即可。\n"
+            f"最后一个错误：{last_error}"
+        )
 
     print("   解压 ffmpeg.exe / ffprobe.exe…")
     wanted = {"ffmpeg.exe", "ffprobe.exe"}
-    found: dict[str, zipfile.ZipInfo] = {}
+    chosen: list[zipfile.ZipInfo] = []
     with zipfile.ZipFile(zip_path) as zf:
-        for info in zf.infolist():
-            name = info.filename.replace("\\", "/")
-            base = name.rsplit("/", 1)[-1].lower()
-            if base in wanted and "/bin/" in f"/{name.lower()}":
-                found[base] = info
-        if len(found) != 2:
-            raise SystemExit("ffmpeg 压缩包结构不对，没找到 bin/ffmpeg.exe 和 bin/ffprobe.exe；删掉 voice-service/_ffmpeg.zip 后重试。")
+        infos = zf.infolist()
+        # 有的包是静态构建（bin/ffmpeg.exe 单独可用），有的是共享构建（exe + 一堆 dll 必须同目录）
+        exes = {}
+        for info in infos:
+            base = info.filename.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if base in wanted:
+                exes.setdefault(base, info)
+        if len(exes) != 2:
+            raise SystemExit("ffmpeg 压缩包结构不对，没找到 ffmpeg.exe 和 ffprobe.exe；删掉 voice-service/_ffmpeg.zip 后重试。")
+        exe_dirs = {info.filename.replace("\\", "/").rpartition("/")[0].lower() for info in exes.values()}
+        chosen = list(exes.values())
+        # 共享构建：把 exe 同目录的 dll 一起解出来
+        for info in infos:
+            path = info.filename.replace("\\", "/")
+            parent = path.rpartition("/")[0].lower()
+            if parent in exe_dirs and path.lower().endswith(".dll"):
+                chosen.append(info)
         FFMPEG_DIR.mkdir(parents=True, exist_ok=True)
-        for base, info in found.items():
-            with zf.open(info) as src, open(FFMPEG_DIR / base, "wb") as dst:
+        for info in chosen:
+            name = info.filename.replace("\\", "/").rsplit("/", 1)[-1]
+            with zf.open(info) as src, open(FFMPEG_DIR / name, "wb") as dst:
                 shutil.copyfileobj(src, dst)
 
     zip_path.unlink(missing_ok=True)
@@ -227,7 +266,7 @@ def report_reference_audio() -> None:
         print("还差参考音频（脚本不下，3~10 秒干净人声的 wav）：")
         print(f"  - {rel(ref)}")
         print("\n获取方式：")
-        print("  1. 从原来那台能跑语音的电脑，拷一份 models/Furina_GPT_SoVITS/ref.wav；")
+        print("  1. 从仓库里恢复（git checkout -- vue-project/models/Furina_GPT_SoVITS/ref.wav）；")
         print("  2. 自己截一段 3~10 秒芙宁娜的语音，存成 wav 放进去。")
     print("\n检查全部资源：python voice-service\\check_assets.py")
 
@@ -265,7 +304,7 @@ def main() -> int:
             for name, size in FURINA_FILES:
                 print(f"  - models/Furina_GPT_SoVITS/{name}  ({human(size)})  [ModelScope]")
         if not args.skip_ffmpeg:
-            print("  - ffmpeg-bin/ffmpeg.exe、ffprobe.exe（从 gyan.dev 下载 zip 后解压）")
+            print("  - ffmpeg-bin/ffmpeg.exe、ffprobe.exe（从 hf-mirror 下载 zip 后解压）")
         print("\n（--dry-run：没有实际下载）")
         return 0
 

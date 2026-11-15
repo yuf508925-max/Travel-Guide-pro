@@ -58,9 +58,9 @@ vue-project/
 │  └─ logs/llm_trace.jsonl  # 监控台读的日志
 ├─ voice-service/           # GPT-SoVITS 本地语音服务
 │  ├─ check_assets.py       # 检查语音资源是否齐全（缺什么一目了然）
-│  ├─ fetch_assets.py       # 一键下载公开的语音资源（底模 / G2PW / ffmpeg）
+│  ├─ fetch_assets.py       # 一键下载语音资源（底模 / G2PW / 芙宁娜权重 / ffmpeg）
 │  └─ start_furina_api.ps1  # 启动语音服务（路径自适应，可放任意目录）
-├─ models/Furina_GPT_SoVITS/# 芙宁娜音色权重与 ref.wav（需单独获取，见 4.4）
+├─ models/Furina_GPT_SoVITS/# 芙宁娜音色权重（fetch_assets.py 下载）+ ref.wav（仓库自带）
 └─ dist/                    # 前端打包产物（npm run build 生成）
 ```
 
@@ -81,7 +81,7 @@ vue-project/
 
 源码、前端资源（Live2D 模型、背景、内置音乐）都已经在仓库里，**不需要另外下载**。
 
-但**语音服务用到的模型和 ffmpeg（约 1.75 GB）不在仓库里**（单文件超过 GitHub 的 100 MB 上限，已被 `.gitignore` 排除），必须按 4.4 单独补装。以下命令都在项目根目录 `vue-project/` 执行。
+但**语音服务用到的模型和 ffmpeg（约 2.1 GB）不在仓库里**（单文件超过 GitHub 的 100 MB 上限，已被 `.gitignore` 排除），必须按 4.4 用一条命令补装（`python voice-service\fetch_assets.py`）。以下命令都在项目根目录 `vue-project/` 执行。
 
 ### 1. 前端
 
@@ -129,7 +129,7 @@ GitHub 对单个文件有 **100 MB** 的硬上限，下面这些都被 `.gitigno
 | GPT-SoVITS 底模（hubert / roberta / sv） | `voice-service/GPT_SoVITS/pretrained_models/` | 约 0.95 GB | HuggingFace 镜像 `lj1995/GPT-SoVITS` |
 | G2PW 多音字模型 | `voice-service/GPT_SoVITS/text/G2PWModel/` | 约 0.6 GB | ModelScope（缺失时首次合成也会自动下载） |
 | **芙宁娜音色权重**（ckpt + pth） | `models/Furina_GPT_SoVITS/` | 约 0.33 GB | ModelScope `leletxh/Furina_GPT_SoVITS` |
-| ffmpeg / ffprobe | `voice-service/ffmpeg-bin/` | 约 0.2 GB | gyan.dev |
+| ffmpeg / ffprobe | `voice-service/ffmpeg-bin/` | 约 0.2 GB | hf-mirror 镜像 `neo7team/ffmpeg`（失败自动换 gyan.dev / GitHub） |
 | 参考音频 `ref.wav` | `models/Furina_GPT_SoVITS/` | 约 0.5 MB | **已经随仓库提供**，无需下载 |
 | （可选）v2 官方底模 | `.../pretrained_models/gsv-v2final-pretrained/` | 约 0.35 GB | 只有想切回官方 v2 音色才需要 |
 
@@ -144,7 +144,7 @@ python voice-service\fetch_assets.py
 1. GPT-SoVITS 底模（hf-mirror.com，约 0.95 GB）
 2. G2PW 多音字模型（ModelScope，约 0.6 GB）
 3. 芙宁娜音色权重 `Funina-e15.ckpt` + `Funina_e8_s464.pth`（ModelScope，约 0.33 GB）
-4. ffmpeg / ffprobe（gyan.dev，约 0.2 GB）
+4. ffmpeg / ffprobe（hf-mirror，约 0.09 GB 包 / 解压后 0.2 GB；该源失败自动换 gyan.dev、GitHub BtbN）
 
 合计约 2.1 GB，支持断点续传，已存在的文件自动跳过。想先看会下什么：`python voice-service\fetch_assets.py --dry-run`。某个源太慢只想补一部分，可以加 `--skip-g2pw` / `--skip-ffmpeg` / `--skip-furina`。
 
@@ -391,6 +391,9 @@ python voice-service\check_assets.py
 
 **14. `pip install -r server\requirements.txt` 报 `UnicodeDecodeError: 'gbk' codec can't decode byte ...`**
 Windows 中文环境下 pip 会用 GBK 解码 requirements 文件，文件里如果有 UTF-8 的中文注释就会炸。仓库里这个文件现在已经改成纯 ASCII 注释；如果你自己往里加注释，请用英文，或者另存为「UTF-8 带 BOM」。
+
+**15. 合成语音时报 `CUDA failure 999` / `fatal : Memory allocation failure`**
+显卡显存不够（常见于后台还开着另一个语音服务或游戏）。先关掉占显存的程序；实在不行用 CPU 跑：把 `voice-service\furina_infer.yaml` 里 `custom:` 下的 `device: cuda` 改成 `device: cpu`、`is_half: true` 改成 `false`，再重启语音服务。CPU 合成一句话约 5～10 秒，能用但慢。
 
 ---
 

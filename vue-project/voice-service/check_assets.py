@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -51,10 +52,10 @@ GROUPS: list[tuple[str, str, list[tuple[Path, int, str]]]] = [
     ),
     (
         "ffmpeg（约 0.2 GB）",
-        "见 README 第四节 4：python voice-service\\fetch_assets.py，或手动解压 ffmpeg 的 bin\\*.exe",
+        "见 README 第四节 4：python voice-service\\fetch_assets.py，或手动解压 ffmpeg 的 bin\\*.exe（共享构建要把同目录 dll 一起放进来）",
         [
-            (VOICE / "ffmpeg-bin" / "ffmpeg.exe", 90 * MB, "voice-service/ffmpeg-bin/ffmpeg.exe"),
-            (VOICE / "ffmpeg-bin" / "ffprobe.exe", 90 * MB, "voice-service/ffmpeg-bin/ffprobe.exe"),
+            (VOICE / "ffmpeg-bin" / "ffmpeg.exe", 100_000, "voice-service/ffmpeg-bin/ffmpeg.exe", "exe"),
+            (VOICE / "ffmpeg-bin" / "ffprobe.exe", 100_000, "voice-service/ffmpeg-bin/ffprobe.exe", "exe"),
         ],
     ),
     (
@@ -85,6 +86,23 @@ def check_file(path: Path, min_size: int) -> tuple[str, str]:
     return "ok", human(size)
 
 
+def check_exe(path: Path, min_size: int) -> tuple[str, str]:
+    """可执行文件：先看体积，再真的跑一下 -version，避免「能看见文件但跑不起来」。"""
+    state, note = check_file(path, min_size)
+    if state != "ok":
+        return state, note
+    try:
+        proc = subprocess.run([str(path), "-version"], capture_output=True, timeout=30)
+    except Exception as exc:  # noqa: BLE001 - 起不来就是坏文件或缺 dll
+        return "broken", f"无法运行（{type(exc).__name__}）"
+    out = (proc.stdout or b"").decode("utf-8", "replace")
+    if proc.returncode != 0 or "version" not in out.lower():
+        first = out.strip().splitlines()[0][:40] if out.strip() else "无输出"
+        return "broken", f"运行失败（缺同目录 dll？）：{first}"
+    version = out.splitlines()[0].split()[2] if len(out.splitlines()[0].split()) > 2 else "ok"
+    return "ok", f"{note}，可运行（{version}）"
+
+
 def main() -> int:
     print("=" * 62)
     print("  语音服务资源检查")
@@ -94,7 +112,12 @@ def main() -> int:
     total = 0
     missing = 0
     for title, hint, files in GROUPS:
-        rows = [(path, min_size, label, *check_file(path, min_size)) for path, min_size, label in files]
+        rows = []
+        for item in files:
+            path, min_size, label = item[0], item[1], item[2]
+            kind = item[3] if len(item) > 3 else "file"
+            state, note = check_exe(path, min_size) if kind == "exe" else check_file(path, min_size)
+            rows.append((path, min_size, label, state, note))
         bad = [row for row in rows if row[3] != "ok"]
         total += len(rows)
         missing += len(bad)
@@ -112,7 +135,7 @@ def main() -> int:
         print("   powershell -NoProfile -ExecutionPolicy Bypass -File voice-service\\start_furina_api.ps1")
         return 0
     print(f"还缺 {missing} / {total} 个文件。按上面每组的「修复」提示补齐后重新运行本脚本。")
-    print("一键补装（不含芙宁娜音色权重）：python voice-service\\fetch_assets.py")
+    print("一键补装：python voice-service\\fetch_assets.py")
     return 1
 
 
