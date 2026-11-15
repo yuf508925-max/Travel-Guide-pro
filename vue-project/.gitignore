@@ -64,7 +64,9 @@ voice-service/__pycache__/
 *.safetensors
 
 # ---- 音色模型（几百 MB，绝不提交）----
-models/
+# 必须用 /models/ 锚定到仓库根目录：写成 models/ 会把源码目录
+# （如 voice-service/GPT_SoVITS/AR/models/）一起忽略掉，克隆后缺文件跑不起来。
+/models/
 
 # 本地预览截图（deliverable，不进仓库）
 preview-*.png

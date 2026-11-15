@@ -57,7 +57,10 @@ vue-project/
 │  ├─ tmp_music/            # 上传的音乐（临时，随会话清理）
 │  └─ logs/llm_trace.jsonl  # 监控台读的日志
 ├─ voice-service/           # GPT-SoVITS 本地语音服务
-├─ models/Furina_GPT_SoVITS/# 语音模型权重与参考音频 ref.wav
+│  ├─ check_assets.py       # 检查语音资源是否齐全（缺什么一目了然）
+│  ├─ fetch_assets.py       # 一键下载公开的语音资源（底模 / G2PW / ffmpeg）
+│  └─ start_furina_api.ps1  # 启动语音服务（路径自适应，可放任意目录）
+├─ models/Furina_GPT_SoVITS/# 芙宁娜音色权重与 ref.wav（需单独获取，见 4.4）
 └─ dist/                    # 前端打包产物（npm run build 生成）
 ```
 
@@ -70,12 +73,15 @@ vue-project/
 | Node.js | `^22.18.0` 或 `>=24.12.0` | 前端；低于这个版本 Vite 8 起不来 |
 | Python | 3.10+（后端在 3.13 上验证） | 后端 `server/` |
 | NVIDIA 显卡 + 驱动（可选） | CUDA 13.4（本项目实测环境） | 只有语音服务用；没有也能跑，只是没声音 |
+| 磁盘空间（可选） | 语音资源约 2 GB | 不装语音服务则不需要 |
 
 ---
 
 ## 四、安装依赖
 
-源码、前端资源（Live2D 模型、背景、内置音乐）都已经在仓库里，**不需要另外下载**。需要装的只有下面这些（都在项目根目录 `vue-project/` 执行）。
+源码、前端资源（Live2D 模型、背景、内置音乐）都已经在仓库里，**不需要另外下载**。
+
+但**语音服务用到的模型和 ffmpeg（约 1.75 GB）不在仓库里**（单文件超过 GitHub 的 100 MB 上限，已被 `.gitignore` 排除），必须按 4.4 单独补装。以下命令都在项目根目录 `vue-project/` 执行。
 
 ### 1. 前端
 
@@ -90,7 +96,7 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r server/requirements.txt
 ```
 
-`server/requirements.txt`：`fastapi`、`uvicorn[standard]`、`openai`、`truststore`。
+`server/requirements.txt`：`fastapi`、`uvicorn[standard]`、`openai`、`truststore`、`cryptography`（用户 API Key 的加密依赖，缺了后端起不来）。
 
 ### 3. 语音服务（可选，需要 PyTorch + CUDA）
 
@@ -112,24 +118,79 @@ voice-service\.venv-gsv\Scripts\python.exe -m pip install -r voice-service\requi
 自检：`voice-service\.venv-gsv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"`，本项目实测输出 `2.15.0+cu134 13.4 True`。
 没有显卡就把 `cu134` 换成 `cpu`，并把 `onnxruntime-gpu` 换成 `onnxruntime`。
 
-### 4. 语音服务的模型和 ffmpeg 已经一起打包了
+### 4. 语音资源（不在仓库里，必须单独补装）
 
-`models/`、`voice-service/GPT_SoVITS/pretrained_models/`、`voice-service/GPT_SoVITS/text/G2PWModel/`、`voice-service/ffmpeg-bin/` 都在项目里，不用另外下载：下完仓库、装完上面的依赖就能直接跑语音。
+GitHub 对单个文件有 **100 MB** 的硬上限，下面这些都被 `.gitignore` 排除了（`/models/`、`*.pth`、`*.ckpt`、`*.onnx`、`voice-service/GPT_SoVITS/pretrained_models/`、`voice-service/GPT_SoVITS/text/G2PWModel/`、`voice-service/ffmpeg-bin/`），所以 `git clone` 下来**没有**它们。不补装，语音服务一定起不来（聊天、天气、行程、vlog 不受影响）。
+
+> 需要说明的是：旧版 `.gitignore` 写的是 `models/`（没有前导 `/`），这条规则会匹配**任意层级**叫 `models` 的目录，结果把源码目录 `voice-service/GPT_SoVITS/AR/models/`、`voice-service/tools/AP_BWE_main/models/` 也一起忽略了，克隆下来直接报 `ModuleNotFoundError: No module named 'AR.models'`。现在已改成 `/models/`，只忽略仓库根目录下的音色权重，缺的源码也已补进仓库。
+
+| 资源 | 放到哪 | 体积 | 来源 |
+| --- | --- | --- | --- |
+| GPT-SoVITS 底模（hubert / roberta / sv） | `voice-service/GPT_SoVITS/pretrained_models/` | 约 0.95 GB | HuggingFace 镜像 `lj1995/GPT-SoVITS` |
+| G2PW 多音字模型 | `voice-service/GPT_SoVITS/text/G2PWModel/` | 约 0.6 GB | ModelScope（缺失时首次合成也会自动下载） |
+| ffmpeg / ffprobe | `voice-service/ffmpeg-bin/` | 约 0.2 GB | gyan.dev |
+| **芙宁娜音色权重** + 参考音频 | `models/Furina_GPT_SoVITS/` | 约 0.3 GB | **只在作者手里**，见第 2 步 |
+| （可选）v2 官方底模 | `.../pretrained_models/gsv-v2final-pretrained/` | 约 0.35 GB | 只有想切回官方 v2 音色才需要 |
+
+#### 第 1 步：一键下载公开资源（推荐）
+
+```bash
+python voice-service\fetch_assets.py
+```
+
+脚本从 hf-mirror.com / ModelScope / gyan.dev 下载上表前三项（约 1.75 GB），支持断点续传，已存在的文件自动跳过。想先看会下什么：`python voice-service\fetch_assets.py --dry-run`。
+
+#### 第 2 步：放芙宁娜音色权重（必须手动）
+
+把下面 3 个文件放到 `models\Furina_GPT_SoVITS\`：
+
+```
+models\Furina_GPT_SoVITS\
+├─ Funina-e15.ckpt      GPT 模型（约 148 MB）
+├─ Funina_e8_s464.pth   SoVITS 模型（约 165 MB）
+└─ ref.wav              3~10 秒参考音频
+```
+
+这三个文件没有公开下载地址，只能：
+
+1. 从作者原来那台能跑语音的电脑上，把整个 `models/Furina_GPT_SoVITS/` 目录拷过来；
+2. 去 [Releases](https://github.com/yuf508925-max/Travel-Guide-pro/releases) 看作者有没有上传（作者上传方法见第十节）；
+3. 找作者要网盘链接。
+
+> 没有它们语音服务能启动，但合成不出芙宁娜的声音。可以临时改用 GPT-SoVITS 官方底模 + 任意 3~10 秒参考音频，只是音色不是芙宁娜。
+
+#### 第 3 步：检查
+
+```bash
+python voice-service\check_assets.py
+```
+
+全部显示 `ok` 再启动语音服务；缺什么、该放哪，它会直接列出来。
+
+> **不想用脚本？** 手动命令：`python -m pip install -U huggingface_hub`，然后
+> `set HF_ENDPOINT=https://hf-mirror.com`（PowerShell 用 `$env:HF_ENDPOINT="https://hf-mirror.com"`），
+> 再执行
+> `huggingface-cli download lj1995/GPT-SoVITS --include "chinese-hubert-base/*" "chinese-roberta-wwm-ext-large/*" "sv/*" --local-dir voice-service\GPT_SoVITS\pretrained_models`
+> （新版 huggingface_hub 里命令叫 `hf download`，参数相同）。
+> G2PW 手动下载 <https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip>，解压后把 `G2PWModel` 目录放到 `voice-service\GPT_SoVITS\text\G2PWModel`（确认里面有 `g2pW.onnx`）。
+> ffmpeg 手动下载 <https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip>，把 `bin\ffmpeg.exe`、`bin\ffprobe.exe` 解压到 `voice-service\ffmpeg-bin\`。
 
 ---
 
 ## 五、运行
 
+> 只想先看界面：装完 4.1（前端）和 4.2（后端），然后跑「后端 + 前端」两个窗口就够了。语音服务是可选的，补完 4.4 再启动。
+
 ### 方式 A：一键启动（推荐）
 
 双击项目根目录的 **`run.bat`**，会依次弹出四个窗口：
 
-1. `_voice.bat` → GPT-SoVITS 语音服务 `http://127.0.0.1:9880`（没装语音环境时这个窗口会报错，关掉即可）
+1. `_voice.bat` → GPT-SoVITS 语音服务 `http://127.0.0.1:9880`（没装语音环境/没补 4.4 的资源时这个窗口会报错退出，关掉即可）
 2. `_api.bat` → 后端 `http://127.0.0.1:8000`
 3. `_monitor.bat` → 大模型监控台 `http://127.0.0.1:8124`
 4. `_web.bat` → 前端 `http://localhost:5173`
 
-等前端窗口出现 `Local: http://localhost:5173`，浏览器打开这个地址即可。
+等前端窗口出现 `Local: http://localhost:5173`，浏览器打开这个地址即可。语音服务第一次启动要加载模型，等 `http://127.0.0.1:9880` 有响应大约需要 30~90 秒。
 
 几个 bat 都会在启动前先杀掉占用对应端口的旧进程，所以重复双击不会「端口被占用」。
 
@@ -138,7 +199,7 @@ voice-service\.venv-gsv\Scripts\python.exe -m pip install -r voice-service\requi
 四个终端，都在项目根目录执行：
 
 ```bash
-# 1) 语音服务（可选）
+# 1) 语音服务（可选，先补完 4.4 的资源）
 powershell -NoProfile -ExecutionPolicy Bypass -File voice-service\start_furina_api.ps1
 
 # 2) 后端（8000）
@@ -282,7 +343,10 @@ Get-NetTCPConnection -LocalPort 8000 -State Listen
 B 站接口有频率限制（HTTP 412），等几十秒再点刷新即可。
 
 **6. 打电话没有声音**
-语音服务没起（9880）。检查 `_voice.bat` 窗口，或确认 `models/Furina_GPT_SoVITS/ref.wav` 存在。
+语音服务没起（9880）。检查 `_voice.bat` 窗口，或确认 `models/Furina_GPT_SoVITS/ref.wav` 存在。资源是否齐全直接跑：
+```bash
+python voice-service\check_assets.py
+```
 
 **7. 语音服务报 CUDA / torch 相关错误**
 先自检：`voice-service\.venv-gsv\Scripts\python.exe -c "import torch; print(torch.version.cuda, torch.cuda.is_available())"`。
@@ -298,3 +362,56 @@ voice-service\.venv-gsv\Scripts\python.exe -m pip install torch torchvision torc
 
 **9. 监控台 8124 打不开**
 单独跑 `_monitor.bat` 看报错；它只依赖 Python 标准库和 `server/logs/` 目录。
+
+**10. 后端启动报 `ModuleNotFoundError: No module named 'cryptography'`**
+旧版 `requirements.txt` 漏了这个依赖，已补上。重新装一次：
+```bash
+.venv\Scripts\python.exe -m pip install -r server/requirements.txt
+```
+
+**11. 语音服务窗口一闪就关，日志里有 `FileNotFoundError`（`Funina-e15.ckpt` / `g2pW.onnx` / `ffmpeg.exe` / `pytorch_model.bin`），或 `No such file or directory: 'ffmpeg'`**
+语音资源没补全。按第四节 4 补装，然后运行：
+```bash
+python voice-service\check_assets.py
+```
+
+**12. 换了台电脑 / 换了目录后，语音服务报 `D:\test\...` 路径不存在**
+旧版的 `start_furina_api.ps1` 和 `furina_infer.yaml` 写死了作者本机的绝对路径，现已改成相对路径；确保你拉到的是最新代码。
+
+**13. `git clone` 下来发现 `voice-service` 里少了很多文件**
+分两种情况：
+
+- **大文件**（`pretrained_models/`、`G2PWModel/`、`ffmpeg-bin/`、根目录 `models/`）：正常，被 `.gitignore` 排除、GitHub 也不收超过 100 MB 的单文件，按第四节 4 补装即可。
+- **源码文件**（`GPT_SoVITS/AR/models/*.py`、`GPT_SoVITS/configs/*.yaml`）：旧版 `.gitignore` 的 `models/` 规则误伤了它们，表现为启动报 `ModuleNotFoundError: No module named 'AR.models'` 或 `FileNotFoundError: tts_infer.yaml`。已修正为 `/models/` 并把文件补进仓库，拉最新代码即可。
+
+**14. `pip install -r server\requirements.txt` 报 `UnicodeDecodeError: 'gbk' codec can't decode byte ...`**
+Windows 中文环境下 pip 会用 GBK 解码 requirements 文件，文件里如果有 UTF-8 的中文注释就会炸。仓库里这个文件现在已经改成纯 ASCII 注释；如果你自己往里加注释，请用英文，或者另存为「UTF-8 带 BOM」。
+
+---
+
+## 十、给仓库作者：大文件怎么传上 GitHub
+
+`git push` 传不上去不是网络问题，是 GitHub 的限制：
+
+- **单文件 > 100 MB** 直接拒收，报错形如 `remote: error: File models/... is 148.00 MB; this exceeds GitHub's file size limit of 100.00 MB`；
+- 仓库超过 1 GB 会收到体积警告；
+- `.gitignore` 里 `/models/`、`*.pth`、`*.ckpt`、`*.onnx`、`voice-service/GPT_SoVITS/pretrained_models/`、`voice-service/ffmpeg-bin/` 等规则本来就把它们排除了，所以现在 GitHub 上没有这些文件。
+
+> ⚠️ 忽略目录的规则记得加前导 `/`：`models/` 会忽略所有同名子目录，`/models/` 才只忽略仓库根目录那一个（见第四节 4 的说明）。同理，`voice-service/GPT_SoVITS/configs/.gitignore` 原来写的 `*.yaml` 会把 `tts_infer.yaml`、`s1*.yaml` 一起排掉，现在只忽略 `*.tmp` / `*.bak`。
+
+推荐用 **GitHub Releases**（单个附件上限 2 GB，不占仓库体积）。装好 GitHub CLI 并登录（`winget install GitHub.cli`，然后 `gh auth login`），在项目根目录执行：
+
+```powershell
+gh release create voice-assets-v1 `
+  "models/Furina_GPT_SoVITS/Funina-e15.ckpt" `
+  "models/Furina_GPT_SoVITS/Funina_e8_s464.pth" `
+  "models/Furina_GPT_SoVITS/ref.wav" `
+  --title "芙宁娜语音资源 v1" `
+  --notes "下载后放到 models/Furina_GPT_SoVITS/ 目录下即可"
+```
+
+传完把 Release 链接填到第四节 4 的第 2 步。
+
+其它约 1.75 GB 的公开资源（底模 / G2PW / ffmpeg）**不用传**，`fetch_assets.py` 已经能从公开镜像下载。
+
+不要试图 `git add -f` 把权重塞进仓库：>100 MB 会被拒；用 Git LFS 免费额度只有 1 GB，而且克隆的人还得额外装 LFS。也不要提交 `.venv/`、`.venv-gsv/`、`node_modules/`、`server/app.db`、`.keys/`。

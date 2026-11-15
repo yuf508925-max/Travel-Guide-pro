@@ -2,3 +2,5 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 openai>=1.40
 truststore>=0.10
+# Fernet (AES) for user API keys in server/keyvault.py; without it the backend fails to start
+cryptography>=42

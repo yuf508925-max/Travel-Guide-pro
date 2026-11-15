@@ -1,1 +1,4 @@
-*.yaml
+# 上游 GPT-SoVITS 默认忽略全部 *.yaml，导致克隆后缺少 tts_infer.yaml / s1*.yaml，
+# 语音服务启动就报 FileNotFoundError。这里改为只忽略临时文件。
+*.tmp
+*.bak
