@@ -28,3 +28,7 @@ imageio-ffmpeg
 pytorch-lightning
 matplotlib
 resampy
+fastapi>=0.115
+anyio>=4.0
+uvicorn[standard]>=0.30
+python-multipart
