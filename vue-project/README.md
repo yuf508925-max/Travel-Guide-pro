@@ -21,6 +21,15 @@
 
 ## 二、目录结构
 
+GitHub 仓库根目录下只有两样东西：`README.md`（就是本文）和 `vue-project/`（项目本体）。下面列的是 `vue-project/` 里面的结构，**所有安装、启动命令都要先进入这个目录再执行**：
+
+```powershell
+git clone https://github.com/yuf508925-max/Travel-Guide-pro.git
+cd Travel-Guide-pro\vue-project
+```
+
+没有装 Git 也可以点 GitHub 页面上的 **Code → Download ZIP**，解压后一样进 `vue-project\`。
+
 ```
 vue-project/
 ├─ run.bat                  # 一键启动（语音 / 后端 / 监控台 / 前端 四个窗口）
@@ -71,9 +80,10 @@ vue-project/
 | 需要安装 | 版本 | 说明 |
 | --- | --- | --- |
 | Node.js | `^22.18.0` 或 `>=24.12.0` | 前端；低于这个版本 Vite 8 起不来 |
-| Python | 3.10+（后端在 3.13 上验证） | 后端 `server/` |
-| NVIDIA 显卡 + 驱动（可选） | CUDA 13.4（本项目实测环境） | 只有语音服务用；没有也能跑，只是没声音 |
-| 磁盘空间（可选） | 语音资源约 2 GB | 不装语音服务则不需要 |
+| Python（后端） | 3.10+（3.13 实测可用） | 后端 `server/`，用系统里任意一个都行 |
+| Python（语音服务） | **3.11**（3.12 也能装；3.13 不行） | `voice-service/` 用它单独建虚拟环境，可以和后端不是同一个版本 |
+| NVIDIA 显卡 + 驱动（可选） | CUDA 13.4（实测环境）；12.x 的卡把 `cu134` 换成 `cu126`/`cu121` 即可 | 只有语音服务用；没有显卡也能跑，只是没声音 |
+| 磁盘空间（可选） | 语音部分留 **8 GB** 以上空闲 | PyTorch 一个包下载就 2.2 GB，解压后 3 GB+；资源 2.1 GB |
 
 ---
 
@@ -81,7 +91,36 @@ vue-project/
 
 源码、前端资源（Live2D 模型、背景、内置音乐）都已经在仓库里，**不需要另外下载**。
 
-但**语音服务用到的模型和 ffmpeg（约 2.1 GB）不在仓库里**（单文件超过 GitHub 的 100 MB 上限，已被 `.gitignore` 排除），必须按 4.4 用一条命令补装（`python voice-service\fetch_assets.py`）。以下命令都在项目根目录 `vue-project/` 执行。
+但**语音服务用到的模型和 ffmpeg（约 2.1 GB）不在仓库里**（单文件超过 GitHub 的 100 MB 上限，已被 `.gitignore` 排除），必须按 4.4 用一条命令补装（`python voice-service\fetch_assets.py`）。
+
+以下命令**都在 `vue-project/` 目录里执行**（先按第二节 `cd Travel-Guide-pro\vue-project`）。
+
+### 0. 复制粘贴版（从零到能跑）
+
+按顺序贴进 PowerShell 就行，中间不用管别的：
+
+```powershell
+# 前端依赖（约 1~2 分钟）
+npm install
+
+# 后端环境
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r server\requirements.txt
+
+# 语音环境（Python 3.11；torch 的 cu134 轮子有 2.2 GB，网慢就等）
+python -m venv voice-service\.venv-gsv
+voice-service\.venv-gsv\Scripts\python.exe -m pip install --upgrade pip
+voice-service\.venv-gsv\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu134
+voice-service\.venv-gsv\Scripts\python.exe -m pip install -r voice-service\requirements-min.txt
+
+# 语音资源（约 2.1 GB，断了重跑同一条即可续传）
+python voice-service\fetch_assets.py
+
+# 自检：15 项全 ok 再启动
+python voice-service\check_assets.py
+```
+
+然后双击 `run.bat`。**只想看界面**（没有声音）的话，前两段跑完就够了，语音两段可以跳过。
 
 ### 1. 前端
 
@@ -102,6 +141,9 @@ python -m venv .venv
 
 不用语音就跳过这节，聊天、天气、行程、vlog 都不受影响。
 
+> ⚠️ **这个虚拟环境必须用 Python 3.11。** `requirements-min.txt` 里锁了 `numpy<2.0`，而 numpy 1.x 没有 Python 3.13 的安装包，用 3.13 会在 `pip install -r` 阶段直接报「No matching distribution found for numpy<2.0」。
+> 先看一眼版本：`python -V`。不是 3.11 就用 `py -3.11 -m venv voice-service\.venv-gsv`（装了 py launcher）或改成对应版本的完整路径，例如 `"C:\Python311\python.exe" -m venv voice-service\.venv-gsv`。
+
 ```bash
 # 独立的 Python 3.11 环境
 python -m venv voice-service\.venv-gsv
@@ -109,14 +151,22 @@ voice-service\.venv-gsv\Scripts\python.exe -m pip install --upgrade pip
 
 # 先装 CUDA 版 PyTorch（默认 pypi 装的是 CPU 版；cu134 对应 CUDA 13.4，
 # 换别的 CUDA 版本就把 cu134 改成 cu130 / cu126 等，驱动满足即可）
+# 注意：torch 这个轮子有 2.2 GB，下载慢是正常的；断了重跑同一条命令，pip 会用缓存续上
 voice-service\.venv-gsv\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu134
 
-# 再装推理依赖
+# 再装推理依赖（会把 numpy 定到 1.26.x，这是对的，别手动升到 2.x）
 voice-service\.venv-gsv\Scripts\python.exe -m pip install -r voice-service\requirements-min.txt
 ```
 
-自检：`voice-service\.venv-gsv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"`，本项目实测输出 `2.15.0+cu134 13.4 True`。
-没有显卡就把 `cu134` 换成 `cpu`，并把 `onnxruntime-gpu` 换成 `onnxruntime`。
+装完自检（三样都要对）：
+
+```powershell
+voice-service\.venv-gsv\Scripts\python.exe -c "import torch, numpy; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), numpy.__version__)"
+```
+
+本项目实测输出 `2.15.0+cu134 13.4 True 1.26.4`。如果 `torch.cuda.is_available()` 是 `False` 或 `torch.version.cuda` 是 `None`，说明装成了 CPU 版或者驱动太旧（见第九节第 7 条）。
+
+没有显卡就把 `cu134` 换成 `cpu`，并把 `onnxruntime-gpu` 换成 `onnxruntime`（`pip install onnxruntime` 后 `pip uninstall -y onnxruntime-gpu`）。CPU 也**能**跑，只是合成一句话要 5～10 秒。
 
 ### 4. 语音资源（不在仓库里，必须单独补装）
 
@@ -132,6 +182,18 @@ GitHub 对单个文件有 **100 MB** 的硬上限，下面这些都被 `.gitigno
 | ffmpeg / ffprobe | `voice-service/ffmpeg-bin/` | 约 0.2 GB | hf-mirror 镜像 `neo7team/ffmpeg`（失败自动换 gyan.dev / GitHub） |
 | 参考音频 `ref.wav` | `models/Furina_GPT_SoVITS/` | 约 0.5 MB | **已经随仓库提供**，无需下载 |
 | （可选）v2 官方底模 | `.../pretrained_models/gsv-v2final-pretrained/` | 约 0.35 GB | 只有想切回官方 v2 音色才需要 |
+
+#### 每一项的直链（`fetch_assets.py` 用的就是这些地址，都实测可下）
+
+| 文件 | 直链 | 字节数 |
+| --- | --- | --- |
+| `Funina-e15.ckpt`（GPT 模型） | <https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/resolve/master/Funina-e15.ckpt> | 155,313,312 |
+| `Funina_e8_s464.pth`（SoVITS 模型） | <https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/resolve/master/Funina_e8_s464.pth> | 172,765,299 |
+| G2PW 压缩包 | <https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip> | 588,857,174 |
+| ffmpeg 压缩包 | <https://hf-mirror.com/neo7team/ffmpeg/resolve/main/ffmpeg.zip?download=true> | 约 85.7 MB |
+| GPT-SoVITS 底模 | <https://hf-mirror.com/lj1995/GPT-SoVITS/tree/main>（脚本按 `resolve/main/<仓库内路径>?download=true` 逐个下载） | 合计约 0.95 GB |
+
+ModelScope 那两个权重也可以直接在网页里点下载：<https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/files>。下载后放进 `models\Furina_GPT_SoVITS\`，文件名不要改（`furina_infer.yaml` 里就是按这两个名字找的）。
 
 #### 第 1 步：一键下载（推荐）
 
@@ -170,7 +232,16 @@ models\Furina_GPT_SoVITS\
 python voice-service\check_assets.py
 ```
 
-全部显示 `ok` 再启动语音服务；缺什么、该放哪，它会直接列出来。
+全部显示 `ok` 再启动语音服务；缺什么、该放哪，它会直接列出来。退出码 0 = 全齐，1 = 还缺东西。
+
+下载途中常见的几种情况，都不用自己动手处理：
+
+- **断了 / 关机了**：重跑同一条 `python voice-service\fetch_assets.py` 就行。脚本先写 `xxx.part`，重跑时用 HTTP Range 接着下；已经下完的文件直接跳过。
+- **只想先看会下什么**：`python voice-service\fetch_assets.py --dry-run`。
+- **只缺其中一类**：可以 `--skip-g2pw` / `--skip-ffmpeg` / `--skip-furina` 跳过不需要的，比如只补芙宁娜权重：`python voice-service\fetch_assets.py --skip-g2pw --skip-ffmpeg`。
+- **体积不对**（浏览器另存成网页、Git LFS 指针那种）：脚本校验字节数，不对会删掉重下；`check_assets.py` 也会把它标成缺。
+- **G2PW 忘了下**：缺 `g2pW.onnx` 时首次合成会自己去 ModelScope 下载，第一句会卡很久，所以还是建议先跑一遍 4.4。
+- **磁盘**：资源下载 2.1 GB、解压后约 2.0 GB，加上语音虚拟环境（PyTorch 解压后 3 GB+），语音部分总共占 8 GB 左右。
 
 > **不想用脚本？** 手动命令：`python -m pip install -U huggingface_hub`，然后
 > `set HF_ENDPOINT=https://hf-mirror.com`（PowerShell 用 `$env:HF_ENDPOINT="https://hf-mirror.com"`），
@@ -196,6 +267,15 @@ python voice-service\check_assets.py
 4. `_web.bat` → 前端 `http://localhost:5173`
 
 等前端窗口出现 `Local: http://localhost:5173`，浏览器打开这个地址即可。语音服务第一次启动要加载模型，等 `http://127.0.0.1:9880` 有响应大约需要 30~90 秒。
+
+**怎么确认语音服务真的起来了：**
+
+```powershell
+(Invoke-WebRequest http://127.0.0.1:9880/docs -UseBasicParsing).StatusCode   # 200 = 已在监听
+```
+
+`http://127.0.0.1:9880/docs` 是 GPT-SoVITS 自带的接口文档页，浏览器能打开就说明 `api_v2.py` 起来了。
+端到端验证：点界面上的电话图标「和芙芙打电话」→「拨出电话」，第一句会慢 1~3 秒（首次加载模型），后面就顺了。没声音就看第九节第 6 条。
 
 几个 bat 都会在启动前先杀掉占用对应端口的旧进程，所以重复双击不会「端口被占用」。
 
@@ -348,7 +428,8 @@ Get-NetTCPConnection -LocalPort 8000 -State Listen
 B 站接口有频率限制（HTTP 412），等几十秒再点刷新即可。
 
 **6. 打电话没有声音**
-语音服务没起（9880）。检查 `_voice.bat` 窗口，或确认 `models/Furina_GPT_SoVITS/ref.wav` 存在。资源是否齐全直接跑：
+语音服务没起（9880）。先看它到底有没有起来：浏览器打开 <http://127.0.0.1:9880/docs>，打不开就是没起，检查 `_voice.bat` 窗口的报错。
+再确认 `models/Furina_GPT_SoVITS/ref.wav` 存在。资源是否齐全直接跑：
 ```bash
 python voice-service\check_assets.py
 ```
