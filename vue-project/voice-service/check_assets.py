@@ -51,6 +51,13 @@ GROUPS: list[tuple[str, str, list[tuple[Path, int, str]]]] = [
         ],
     ),
     (
+        "语种切分模型（约 0.13 GB）",
+        "见 README 第四节 4：python voice-service\\fetch_assets.py；缺它时 /tts 会直接返回 400（Cache directory not found）",
+        [
+            (GSV / "pretrained_models" / "fast_langdetect" / "lid.176.bin", 120 * MB, "GPT_SoVITS/pretrained_models/fast_langdetect/lid.176.bin"),
+        ],
+    ),
+    (
         "ffmpeg（约 0.2 GB）",
         "见 README 第四节 4：python voice-service\\fetch_assets.py，或手动解压 ffmpeg 的 bin\\*.exe（共享构建要把同目录 dll 一起放进来）",
         [

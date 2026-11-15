@@ -67,7 +67,7 @@ vue-project/
 │  └─ logs/llm_trace.jsonl  # 监控台读的日志
 ├─ voice-service/           # GPT-SoVITS 本地语音服务
 │  ├─ check_assets.py       # 检查语音资源是否齐全（缺什么一目了然）
-│  ├─ fetch_assets.py       # 一键下载语音资源（底模 / G2PW / 芙宁娜权重 / ffmpeg）
+│  ├─ fetch_assets.py       # 一键下载语音资源（底模 / G2PW / 芙宁娜权重 / ffmpeg / 语种切分模型）
 │  └─ start_furina_api.ps1  # 启动语音服务（路径自适应，可放任意目录）
 ├─ models/Furina_GPT_SoVITS/# 芙宁娜音色权重（fetch_assets.py 下载）+ ref.wav（仓库自带）
 └─ dist/                    # 前端打包产物（npm run build 生成）
@@ -180,6 +180,7 @@ GitHub 对单个文件有 **100 MB** 的硬上限，下面这些都被 `.gitigno
 | --- | --- | --- | --- |
 | GPT-SoVITS 底模（hubert / roberta / sv） | `voice-service/GPT_SoVITS/pretrained_models/` | 约 0.95 GB | HuggingFace 镜像 `lj1995/GPT-SoVITS` |
 | G2PW 多音字模型 | `voice-service/GPT_SoVITS/text/G2PWModel/` | 约 0.6 GB | ModelScope（缺失时首次合成也会自动下载） |
+| 语种切分模型 `lid.176.bin` | `voice-service/GPT_SoVITS/pretrained_models/fast_langdetect/` | 约 0.13 GB | GitHub `LlmKira/fast-langdetect` release（官方源 `dl.fbaipublicfiles.com` 国内常连不上）；**缺了 `/tts` 会直接返回 400** |
 | **芙宁娜音色权重**（ckpt + pth） | `models/Furina_GPT_SoVITS/` | 约 0.33 GB | ModelScope `leletxh/Furina_GPT_SoVITS` |
 | ffmpeg / ffprobe | `voice-service/ffmpeg-bin/` | 约 0.2 GB | hf-mirror 镜像 `neo7team/ffmpeg`（失败自动换 gyan.dev / GitHub） |
 | 参考音频 `ref.wav` | `models/Furina_GPT_SoVITS/` | 约 0.5 MB | **已经随仓库提供**，无需下载 |
@@ -192,6 +193,7 @@ GitHub 对单个文件有 **100 MB** 的硬上限，下面这些都被 `.gitigno
 | `Funina-e15.ckpt`（GPT 模型） | <https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/resolve/master/Funina-e15.ckpt> | 155,313,312 |
 | `Funina_e8_s464.pth`（SoVITS 模型） | <https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/resolve/master/Funina_e8_s464.pth> | 172,765,299 |
 | G2PW 压缩包 | <https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip> | 588,857,174 |
+| 语种切分模型 `lid.176.bin` | <https://github.com/LlmKira/fast-langdetect/releases/download/models-v1/lid.176.bin> | 131,266,198（md5 `01810bc59c6a3d2b79c79e6336612f65`） |
 | ffmpeg 压缩包 | <https://hf-mirror.com/neo7team/ffmpeg/resolve/main/ffmpeg.zip?download=true> | 约 85.7 MB |
 | GPT-SoVITS 底模 | <https://hf-mirror.com/lj1995/GPT-SoVITS/tree/main>（脚本按 `resolve/main/<仓库内路径>?download=true` 逐个下载） | 合计约 0.95 GB |
 
@@ -209,8 +211,9 @@ python voice-service\fetch_assets.py
 2. G2PW 多音字模型（ModelScope，约 0.6 GB）
 3. 芙宁娜音色权重 `Funina-e15.ckpt` + `Funina_e8_s464.pth`（ModelScope，约 0.33 GB）
 4. ffmpeg / ffprobe（hf-mirror，约 0.09 GB 包 / 解压后 0.2 GB；该源失败自动换 gyan.dev、GitHub BtbN）
+5. 语种切分模型 `lid.176.bin`（GitHub release，约 0.13 GB；`fast_langdetect` 的缓存目录也会一并建好）
 
-合计约 2.1 GB，支持断点续传，已存在的文件自动跳过。想先看会下什么：`python voice-service\fetch_assets.py --dry-run`。某个源太慢只想补一部分，可以加 `--skip-g2pw` / `--skip-ffmpeg` / `--skip-furina`。
+合计约 2.2 GB，支持断点续传，已存在的文件自动跳过。想先看会下什么：`python voice-service\fetch_assets.py --dry-run`。某个源太慢只想补一部分，可以加 `--skip-g2pw` / `--skip-ffmpeg` / `--skip-furina` / `--skip-langdetect`。
 
 #### 第 2 步：确认 `ref.wav` 在
 

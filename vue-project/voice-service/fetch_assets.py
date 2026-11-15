@@ -6,6 +6,7 @@
   * G2PW 多音字模型      https://www.modelscope.cn/models/kamiorinn/g2pw
   * 芙宁娜音色权重       https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS
   * ffmpeg              https://www.gyan.dev/ffmpeg/builds/（失败自动换 GitHub BtbN 镜像）
+  * 语种切分模型         https://github.com/LlmKira/fast-langdetect/releases（官方源国内常连不上）
 
 用法（在项目根目录 vue-project 或任意目录执行都行）：
     python voice-service\\fetch_assets.py                 # 下载全部资源（约 2.1 GB）
@@ -20,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import sys
@@ -35,6 +37,7 @@ GSV = VOICE / "GPT_SoVITS"
 PRETRAINED = GSV / "pretrained_models"
 FFMPEG_DIR = VOICE / "ffmpeg-bin"
 G2PW_DIR = GSV / "text" / "G2PWModel"
+LANGDETECT_DIR = PRETRAINED / "fast_langdetect"
 
 MB = 1024 * 1024
 CHUNK = 1024 * 1024
@@ -73,6 +76,17 @@ MS_FURINA_REPO = "https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/res
 FURINA_FILES = [
     ("Funina-e15.ckpt", 155_313_312),
     ("Funina_e8_s464.pth", 172_765_299),
+]
+
+# 语种切分模型：LangSegmenter 把 fast-langdetect 的 cache_dir 写死在
+# GPT_SoVITS/pretrained_models/fast_langdetect，目录（或模型）缺失时 /tts 直接 400。
+# 官方源 fbaipublicfiles 在国内常连不上，GitHub release 镜像实测可用。
+LANGDETECT_MODEL = "lid.176.bin"
+LANGDETECT_SIZE = 131_266_198
+LANGDETECT_MD5 = "01810bc59c6a3d2b79c79e6336612f65"
+LANGDETECT_URLS = [
+    "https://github.com/LlmKira/fast-langdetect/releases/download/models-v1/lid.176.bin",
+    "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin",
 ]
 
 HEADERS = {"User-Agent": "travel-guide-fetch-assets/1.0"}
@@ -154,15 +168,23 @@ def download(url: str, dest: Path, expected: int | None = None) -> None:
     raise SystemExit(f"下载失败（已重试 3 次）：{url}\n原因：{last_error}")
 
 
+def file_md5(path: Path) -> str:
+    hasher = hashlib.md5()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(CHUNK), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def fetch_hf(endpoint: str, files: list[tuple[str, int]]) -> None:
-    print(f"\n[1/4] GPT-SoVITS 底模 -> {PRETRAINED}  (源: {endpoint})")
+    print(f"\n[1/5] GPT-SoVITS 底模 -> {PRETRAINED}  (源: {endpoint})")
     for rel, size in files:
         url = f"{endpoint.rstrip('/')}/{HF_REPO}/resolve/main/{rel}?download=true"
         download(url, PRETRAINED / rel, size)
 
 
 def fetch_g2pw() -> None:
-    print(f"\n[2/4] G2PW 多音字模型 -> {G2PW_DIR}  (源: ModelScope)")
+    print(f"\n[2/5] G2PW 多音字模型 -> {G2PW_DIR}  (源: ModelScope)")
     if (G2PW_DIR / "g2pW.onnx").exists():
         print("   跳过（已存在）")
         return
@@ -191,7 +213,7 @@ def fetch_g2pw() -> None:
 
 
 def fetch_ffmpeg() -> None:
-    print(f"\n[4/4] ffmpeg -> {FFMPEG_DIR}")
+    print(f"\n[4/5] ffmpeg -> {FFMPEG_DIR}")
     if (FFMPEG_DIR / "ffmpeg.exe").exists() and (FFMPEG_DIR / "ffprobe.exe").exists():
         print("   跳过（已存在）")
         return
@@ -252,9 +274,44 @@ def fetch_ffmpeg() -> None:
 
 
 def fetch_furina() -> None:
-    print(f"\n[3/4] 芙宁娜音色权重 -> {FURINA_DIR}  (源: ModelScope leletxh/Furina_GPT_SoVITS)")
+    print(f"\n[3/5] 芙宁娜音色权重 -> {FURINA_DIR}  (源: ModelScope leletxh/Furina_GPT_SoVITS)")
     for name, size in FURINA_FILES:
         download(f"{MS_FURINA_REPO}/{name}", FURINA_DIR / name, size)
+
+
+def fetch_langdetect() -> None:
+    print(f"\n[5/5] 语种切分模型 -> {LANGDETECT_DIR}")
+    # 目录本身就是必需的：LangSegmenter 传了显式 cache_dir，目录不存在时
+    # fast-langdetect 会抛 FileNotFoundError，/tts 直接 400
+    LANGDETECT_DIR.mkdir(parents=True, exist_ok=True)
+    dest = LANGDETECT_DIR / LANGDETECT_MODEL
+
+    if dest.exists() and dest.stat().st_size == LANGDETECT_SIZE and file_md5(dest) == LANGDETECT_MD5:
+        print(f"   跳过（已存在）: {rel(dest)}")
+        return
+
+    last_error: object = None
+    for url in LANGDETECT_URLS:
+        host = url.split("/")[2]
+        print(f"   源: {host}")
+        try:
+            download(url, dest, LANGDETECT_SIZE)
+            if file_md5(dest) != LANGDETECT_MD5:
+                raise IOError("md5 校验失败，镜像可能改过文件")
+            print(f"   完成: {rel(dest)}")
+            return
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - 换下一个源
+            last_error = exc
+            dest.unlink(missing_ok=True)
+            dest.with_name(dest.name + ".part").unlink(missing_ok=True)
+            print(f"   {host} 不可用，换下一个源…")
+
+    raise SystemExit(
+        "语种切分模型下载失败，所有源都试过了。\n"
+        f"手动下载 {LANGDETECT_MODEL} 放到 {rel(LANGDETECT_DIR)} 即可（131 MB，md5 {LANGDETECT_MD5}）：\n"
+        f"  {LANGDETECT_URLS[0]}\n"
+        f"最后一个错误：{last_error}"
+    )
 
 
 def report_reference_audio() -> None:
@@ -278,6 +335,7 @@ def main() -> int:
     parser.add_argument("--skip-g2pw", action="store_true", help="跳过 G2PW 多音字模型")
     parser.add_argument("--skip-ffmpeg", action="store_true", help="跳过 ffmpeg")
     parser.add_argument("--skip-furina", action="store_true", help="跳过芙宁娜音色权重")
+    parser.add_argument("--skip-langdetect", action="store_true", help="跳过语种切分模型（lid.176.bin）")
     parser.add_argument("--dry-run", action="store_true", help="只打印要下载什么，不真的下载")
     args = parser.parse_args()
 
@@ -305,22 +363,28 @@ def main() -> int:
                 print(f"  - models/Furina_GPT_SoVITS/{name}  ({human(size)})  [ModelScope]")
         if not args.skip_ffmpeg:
             print("  - ffmpeg-bin/ffmpeg.exe、ffprobe.exe（从 hf-mirror 下载 zip 后解压）")
+        if not args.skip_langdetect:
+            print(f"  - GPT_SoVITS/pretrained_models/fast_langdetect/{LANGDETECT_MODEL}  ({human(LANGDETECT_SIZE)})  [GitHub release]")
         print("\n（--dry-run：没有实际下载）")
         return 0
 
     fetch_hf(args.hf_endpoint, files)
     if args.skip_g2pw:
-        print("\n[2/4] 已跳过 G2PW")
+        print("\n[2/5] 已跳过 G2PW")
     else:
         fetch_g2pw()
     if args.skip_furina:
-        print("\n[3/4] 已跳过芙宁娜音色权重")
+        print("\n[3/5] 已跳过芙宁娜音色权重")
     else:
         fetch_furina()
     if args.skip_ffmpeg:
-        print("\n[4/4] 已跳过 ffmpeg")
+        print("\n[4/5] 已跳过 ffmpeg")
     else:
         fetch_ffmpeg()
+    if args.skip_langdetect:
+        print("\n[5/5] 已跳过语种切分模型")
+    else:
+        fetch_langdetect()
 
     report_reference_audio()
     return 0

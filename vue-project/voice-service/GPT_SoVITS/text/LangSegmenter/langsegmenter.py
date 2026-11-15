@@ -8,7 +8,14 @@ jieba.setLogLevel(logging.CRITICAL)
 # 更改fast_langdetect大模型位置
 from pathlib import Path
 import fast_langdetect
-fast_langdetect.infer._default_detector = fast_langdetect.infer.LangDetector(fast_langdetect.infer.LangDetectConfig(cache_dir=Path(__file__).parent.parent.parent / "pretrained_models" / "fast_langdetect"))
+
+# fast_langdetect 只对「默认缓存目录」自动 mkdir；这里传的是显式 cache_dir，
+# 目录不存在时 LangDetector 会直接抛 FileNotFoundError: Cache directory not found，
+# 整个 /tts 请求就被 api_v2 的兜底 except 变成 400。所以先建目录，
+# 模型 lid.176.bin 由库在首次推理时下载到该目录（也可用 fetch_assets.py 预置）。
+_langdetect_cache_dir = Path(__file__).parent.parent.parent / "pretrained_models" / "fast_langdetect"
+_langdetect_cache_dir.mkdir(parents=True, exist_ok=True)
+fast_langdetect.infer._default_detector = fast_langdetect.infer.LangDetector(fast_langdetect.infer.LangDetectConfig(cache_dir=_langdetect_cache_dir))
 
 
 from split_lang import LangSplitter
