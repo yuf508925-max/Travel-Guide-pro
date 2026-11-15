@@ -3,7 +3,6 @@ custom:
   cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
   device: cuda
   is_half: true
-  # 相对路径：以 voice-service 目录为工作目录（start_furina_api.ps1 会先切到这里）
   t2s_weights_path: ../models/Furina_GPT_SoVITS/Funina-e15.ckpt
   version: v2ProPlus
   vits_weights_path: ../models/Furina_GPT_SoVITS/Funina_e8_s464.pth
