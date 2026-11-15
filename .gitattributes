@@ -1,0 +1,5 @@
+# Windows batch files must keep CRLF bytes in the repo.
+# cmd reads .bat by byte offset; LF-only makes it eat the first chars of each line
+# (echo -> e/ho), so every line runs as an unknown command. See README FAQ 16.
+*.bat -text diff
+*.cmd -text diff

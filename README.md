@@ -168,6 +168,8 @@ voice-service\.venv-gsv\Scripts\python.exe -c "import torch, numpy; print(torch.
 
 没有显卡就把 `cu134` 换成 `cpu`，并把 `onnxruntime-gpu` 换成 `onnxruntime`（`pip install onnxruntime` 后 `pip uninstall -y onnxruntime-gpu`）。CPU 也**能**跑，只是合成一句话要 5～10 秒。
 
+> `jieba_fast` 不用你单独装。GPT-SoVITS 的文本处理会 `import jieba_fast`，而它在 PyPI 上只有源码包（Windows 上要 MSVC 才能编译），所以仓库里放了一个兼容层 `voice-service\jieba_fast\`，直接转发到纯 Python 的 `jieba`（`requirements-min.txt` 里已有）。`api_v2.py` 启动时脚本所在目录会自动进 `sys.path`，因此能命中这个兼容层。
+
 ### 4. 语音资源（不在仓库里，必须单独补装）
 
 GitHub 对单个文件有 **100 MB** 的硬上限，下面这些都被 `.gitignore` 排除了（`/models/`、`*.pth`、`*.ckpt`、`*.onnx`、`voice-service/GPT_SoVITS/pretrained_models/`、`voice-service/GPT_SoVITS/text/G2PWModel/`、`voice-service/ffmpeg-bin/`），所以 `git clone` 下来**没有**它们。不补装，语音服务一定起不来（聊天、天气、行程、vlog 不受影响）。
@@ -475,6 +477,25 @@ Windows 中文环境下 pip 会用 GBK 解码 requirements 文件，文件里如
 
 **15. 合成语音时报 `CUDA failure 999` / `fatal : Memory allocation failure`**
 显卡显存不够（常见于后台还开着另一个语音服务或游戏）。先关掉占显存的程序；实在不行用 CPU 跑：把 `voice-service\furina_infer.yaml` 里 `custom:` 下的 `device: cuda` 改成 `device: cpu`、`is_half: true` 改成 `false`，再重启语音服务。CPU 合成一句话约 5～10 秒，能用但慢。
+
+**16. 跑 `run.bat` 出来一串「'e' 不是内部或外部命令」「'Starting:' 不是内部或外部命令」「'voice' / 'api' / 'web' / 'monitor' 不是内部或外部命令」**
+`.bat` 文件被存成了 LF 换行（Linux 风格）。cmd 读批处理是按字节偏移跳行的，只有 LF 会让它每行开头丢掉 1～2 个字符——`echo` 变成 `e` 或 `ho`、`title` 变成 `tle`，剩下的文本就被当成命令执行，于是每一行都报「不是内部或外部命令」。
+
+仓库里这 5 个 `.bat` 已经改成 CRLF，并加了根目录 `.gitattributes`（`*.bat -text diff`）防止再被换回去。如果你手上仍是旧的 ZIP 或旧 clone，重新拉一份最新代码最省事；不想重拉就在 `vue-project` 目录跑这段手工转换：
+
+```powershell
+Get-ChildItem .\*.bat | ForEach-Object {
+  $t = ([System.IO.File]::ReadAllText($_.FullName)) -replace "`r`n", "`n" -replace "`n", "`r`n"
+  [System.IO.File]::WriteAllText($_.FullName, $t, [System.Text.Encoding]::GetEncoding(936))
+}
+```
+
+**17. 语音服务报 `ModuleNotFoundError: No module named 'jieba_fast'`**
+见第四节 3 的说明：仓库自带兼容层 `voice-service\jieba_fast\`（两个文件：`__init__.py`、`posseg.py`），正常拉下来的代码不会缺。报这个错说明你那份代码里没有该目录（旧版 ZIP / 旧 clone），从最新代码补上这两个文件即可；也可以临时硬装（需要 MSVC 编译环境，不推荐）：
+
+```bash
+voice-service\.venv-gsv\Scripts\python.exe -m pip install jieba_fast
+```
 
 ---
 

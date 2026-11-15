@@ -4,7 +4,7 @@ echo Starting: voice service / backend / frontend / llm monitor
 echo   voice    http://127.0.0.1:9880
 echo   api      http://127.0.0.1:8000
 echo   web      http://127.0.0.1:5173
-echo   monitor  http://127.0.0.1:8124   (backend ^<-> LLM ¶Ô»°¼à¿Ø)
+echo   monitor  http://127.0.0.1:8124   (backend ^<-> LLM ??????)
 echo.
 start "Furina Voice" "%~dp0_voice.bat"
 timeout /t 2 /nobreak >nul
