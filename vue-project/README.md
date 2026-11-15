@@ -466,9 +466,6 @@ voice-service\.venv-gsv\Scripts\python.exe -m pip install torch torchvision torc
 python voice-service\check_assets.py
 ```
 
-**12. 换了台电脑 / 换了目录后，语音服务报 `D:\test\...` 路径不存在**
-旧版的 `start_furina_api.ps1` 和 `furina_infer.yaml` 写死了作者本机的绝对路径，现已改成相对路径；确保你拉到的是最新代码。
-
 **13. `git clone` 下来发现 `voice-service` 里少了很多文件**
 分两种情况：
 
@@ -501,31 +498,3 @@ voice-service\.venv-gsv\Scripts\python.exe -m pip install jieba_fast
 ```
 
 ---
-
-## 十、给仓库作者：大文件怎么传上 GitHub
-
-`git push` 传不上去不是网络问题，是 GitHub 的限制：
-
-- **单文件 > 100 MB** 直接拒收，报错形如 `remote: error: File models/... is 148.00 MB; this exceeds GitHub's file size limit of 100.00 MB`；
-- 仓库超过 1 GB 会收到体积警告；
-- `.gitignore` 里 `/models/`、`*.pth`、`*.ckpt`、`*.onnx`、`voice-service/GPT_SoVITS/pretrained_models/`、`voice-service/ffmpeg-bin/` 等规则本来就把它们排除了，所以现在 GitHub 上没有这些文件。
-
-> ⚠️ 忽略目录的规则记得加前导 `/`：`models/` 会忽略所有同名子目录，`/models/` 才只忽略仓库根目录那一个（见第四节 4 的说明）。同理，`voice-service/GPT_SoVITS/configs/.gitignore` 原来写的 `*.yaml` 会把 `tts_infer.yaml`、`s1*.yaml` 一起排掉，现在只忽略 `*.tmp` / `*.bak`。
-
-推荐用 **GitHub Releases**（单个附件上限 2 GB，不占仓库体积）。装好 GitHub CLI 并登录（`winget install GitHub.cli`，然后 `gh auth login`），在项目根目录执行：
-
-```powershell
-gh release create voice-assets-v1 `
-  "models/Furina_GPT_SoVITS/Funina-e15.ckpt" `
-  "models/Furina_GPT_SoVITS/Funina_e8_s464.pth" `
-  --title "芙宁娜语音资源 v1" `
-  --notes "下载后放到 models/Furina_GPT_SoVITS/ 目录下即可"
-```
-
-> 注意：`gh` 没装会报「无法将“gh”项识别为 cmdlet」，先 `winget install --id GitHub.cli -e`，装完**重开窗口**；命令里的引号必须是英文 `"`，中文引号 `”` 会让路径解析失败。不想装 CLI 就直接在网页 <https://github.com/yuf508925-max/Travel-Guide-pro/releases> 点 `Draft a new release` 手动拖文件。
-
-**现状：这两个权重已经传在 ModelScope 上了**（`leletxh/Furina_GPT_SoVITS`），`fetch_assets.py` 会自动下载，所以 Release 只是备用镜像，不是必需。`ref.wav`（0.5 MB）已经直接提交进仓库，也不用传。
-
-其它约 1.75 GB 的公开资源（底模 / G2PW / ffmpeg）**不用传**，`fetch_assets.py` 已经能从公开镜像下载。
-
-不要试图 `git add -f` 把权重塞进仓库：>100 MB 会被拒；用 Git LFS 免费额度只有 1 GB，而且克隆的人还得额外装 LFS。也不要提交 `.venv/`、`.venv-gsv/`、`node_modules/`、`server/app.db`、`.keys/`。
