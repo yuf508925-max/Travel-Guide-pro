@@ -59,7 +59,7 @@ GROUPS: list[tuple[str, str, list[tuple[Path, int, str]]]] = [
     ),
     (
         "芙宁娜音色权重（约 0.3 GB，仓库里没有）",
-        "作者没有公开下载地址：从原机器拷贝 models/Furina_GPT_SoVITS/，或到 GitHub Releases 找作者上传的压缩包",
+        "先跑 python voice-service\\fetch_assets.py 自动下载（ModelScope: leletxh/Furina_GPT_SoVITS）；ref.wav 通常随仓库提供",
         [
             (MODELS / "Funina-e15.ckpt", 140 * MB, "models/Furina_GPT_SoVITS/Funina-e15.ckpt（GPT 模型）"),
             (MODELS / "Funina_e8_s464.pth", 150 * MB, "models/Furina_GPT_SoVITS/Funina_e8_s464.pth（SoVITS 模型）"),

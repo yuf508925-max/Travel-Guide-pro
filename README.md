@@ -128,36 +128,41 @@ GitHub 对单个文件有 **100 MB** 的硬上限，下面这些都被 `.gitigno
 | --- | --- | --- | --- |
 | GPT-SoVITS 底模（hubert / roberta / sv） | `voice-service/GPT_SoVITS/pretrained_models/` | 约 0.95 GB | HuggingFace 镜像 `lj1995/GPT-SoVITS` |
 | G2PW 多音字模型 | `voice-service/GPT_SoVITS/text/G2PWModel/` | 约 0.6 GB | ModelScope（缺失时首次合成也会自动下载） |
+| **芙宁娜音色权重**（ckpt + pth） | `models/Furina_GPT_SoVITS/` | 约 0.33 GB | ModelScope `leletxh/Furina_GPT_SoVITS` |
 | ffmpeg / ffprobe | `voice-service/ffmpeg-bin/` | 约 0.2 GB | gyan.dev |
-| **芙宁娜音色权重** + 参考音频 | `models/Furina_GPT_SoVITS/` | 约 0.3 GB | **只在作者手里**，见第 2 步 |
+| 参考音频 `ref.wav` | `models/Furina_GPT_SoVITS/` | 约 0.5 MB | **已经随仓库提供**，无需下载 |
 | （可选）v2 官方底模 | `.../pretrained_models/gsv-v2final-pretrained/` | 约 0.35 GB | 只有想切回官方 v2 音色才需要 |
 
-#### 第 1 步：一键下载公开资源（推荐）
+#### 第 1 步：一键下载（推荐）
 
 ```bash
 python voice-service\fetch_assets.py
 ```
 
-脚本从 hf-mirror.com / ModelScope / gyan.dev 下载上表前三项（约 1.75 GB），支持断点续传，已存在的文件自动跳过。想先看会下什么：`python voice-service\fetch_assets.py --dry-run`。
+脚本会依次下载：
 
-#### 第 2 步：放芙宁娜音色权重（必须手动）
+1. GPT-SoVITS 底模（hf-mirror.com，约 0.95 GB）
+2. G2PW 多音字模型（ModelScope，约 0.6 GB）
+3. 芙宁娜音色权重 `Funina-e15.ckpt` + `Funina_e8_s464.pth`（ModelScope，约 0.33 GB）
+4. ffmpeg / ffprobe（gyan.dev，约 0.2 GB）
 
-把下面 3 个文件放到 `models\Furina_GPT_SoVITS\`：
+合计约 2.1 GB，支持断点续传，已存在的文件自动跳过。想先看会下什么：`python voice-service\fetch_assets.py --dry-run`。某个源太慢只想补一部分，可以加 `--skip-g2pw` / `--skip-ffmpeg` / `--skip-furina`。
+
+#### 第 2 步：确认 `ref.wav` 在
+
+`models\Furina_GPT_SoVITS\` 里应该有：
 
 ```
 models\Furina_GPT_SoVITS\
-├─ Funina-e15.ckpt      GPT 模型（约 148 MB）
-├─ Funina_e8_s464.pth   SoVITS 模型（约 165 MB）
-└─ ref.wav              3~10 秒参考音频
+├─ Funina-e15.ckpt      GPT 模型（第 1 步下载）
+├─ Funina_e8_s464.pth   SoVITS 模型（第 1 步下载）
+└─ ref.wav              3~10 秒参考音频（仓库自带）
 ```
 
-这三个文件没有公开下载地址，只能：
+`ref.wav` 只有 500 KB 左右，不受 100 MB 限制，所以直接放在仓库里了。如果你把它删了或想换音色，自己截一段 3~10 秒的干净人声（wav）命名为 `ref.wav` 放进去即可。
 
-1. 从作者原来那台能跑语音的电脑上，把整个 `models/Furina_GPT_SoVITS/` 目录拷过来；
-2. 去 [Releases](https://github.com/yuf508925-max/Travel-Guide-pro/releases) 看作者有没有上传（作者上传方法见第十节）；
-3. 找作者要网盘链接。
-
-> 没有它们语音服务能启动，但合成不出芙宁娜的声音。可以临时改用 GPT-SoVITS 官方底模 + 任意 3~10 秒参考音频，只是音色不是芙宁娜。
+> 手动下载芙宁娜权重（不想用脚本时）：
+> <https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/files> 里下载 `Funina-e15.ckpt`、`Funina_e8_s464.pth`，放进 `models\Furina_GPT_SoVITS\`。
 
 #### 第 3 步：检查
 
@@ -405,12 +410,13 @@ Windows 中文环境下 pip 会用 GBK 解码 requirements 文件，文件里如
 gh release create voice-assets-v1 `
   "models/Furina_GPT_SoVITS/Funina-e15.ckpt" `
   "models/Furina_GPT_SoVITS/Funina_e8_s464.pth" `
-  "models/Furina_GPT_SoVITS/ref.wav" `
   --title "芙宁娜语音资源 v1" `
   --notes "下载后放到 models/Furina_GPT_SoVITS/ 目录下即可"
 ```
 
-传完把 Release 链接填到第四节 4 的第 2 步。
+> 注意：`gh` 没装会报「无法将“gh”项识别为 cmdlet」，先 `winget install --id GitHub.cli -e`，装完**重开窗口**；命令里的引号必须是英文 `"`，中文引号 `”` 会让路径解析失败。不想装 CLI 就直接在网页 <https://github.com/yuf508925-max/Travel-Guide-pro/releases> 点 `Draft a new release` 手动拖文件。
+
+**现状：这两个权重已经传在 ModelScope 上了**（`leletxh/Furina_GPT_SoVITS`），`fetch_assets.py` 会自动下载，所以 Release 只是备用镜像，不是必需。`ref.wav`（0.5 MB）已经直接提交进仓库，也不用传。
 
 其它约 1.75 GB 的公开资源（底模 / G2PW / ffmpeg）**不用传**，`fetch_assets.py` 已经能从公开镜像下载。
 

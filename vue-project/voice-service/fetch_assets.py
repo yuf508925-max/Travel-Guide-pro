@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """fetch_assets.py —— 一键补装语音服务需要的公开资源（不含芙宁娜音色权重）
 
 会用到的下载源（国内可直连）：
@@ -59,6 +59,14 @@ HF_V2_FILES = [
 
 G2PW_URL = "https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip"
 FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+# 芙宁娜音色权重（作者自训，已传到 ModelScope）
+FURINA_DIR = ROOT / "models" / "Furina_GPT_SoVITS"
+MS_FURINA_REPO = "https://www.modelscope.cn/models/leletxh/Furina_GPT_SoVITS/resolve/master"
+FURINA_FILES = [
+    ("Funina-e15.ckpt", 155_313_312),
+    ("Funina_e8_s464.pth", 172_765_299),
+]
 
 HEADERS = {"User-Agent": "travel-guide-fetch-assets/1.0"}
 
@@ -140,14 +148,14 @@ def download(url: str, dest: Path, expected: int | None = None) -> None:
 
 
 def fetch_hf(endpoint: str, files: list[tuple[str, int]]) -> None:
-    print(f"\n[1/3] GPT-SoVITS 底模 -> {PRETRAINED}  (源: {endpoint})")
+    print(f"\n[1/4] GPT-SoVITS 底模 -> {PRETRAINED}  (源: {endpoint})")
     for rel, size in files:
         url = f"{endpoint.rstrip('/')}/{HF_REPO}/resolve/main/{rel}?download=true"
         download(url, PRETRAINED / rel, size)
 
 
 def fetch_g2pw() -> None:
-    print(f"\n[2/3] G2PW 多音字模型 -> {G2PW_DIR}  (源: ModelScope)")
+    print(f"\n[2/4] G2PW 多音字模型 -> {G2PW_DIR}  (源: ModelScope)")
     if (G2PW_DIR / "g2pW.onnx").exists():
         print("   跳过（已存在）")
         return
@@ -176,7 +184,7 @@ def fetch_g2pw() -> None:
 
 
 def fetch_ffmpeg() -> None:
-    print(f"\n[3/3] ffmpeg -> {FFMPEG_DIR}  (源: gyan.dev)")
+    print(f"\n[4/4] ffmpeg -> {FFMPEG_DIR}  (源: gyan.dev)")
     if (FFMPEG_DIR / "ffmpeg.exe").exists() and (FFMPEG_DIR / "ffprobe.exe").exists():
         print("   跳过（已存在）")
         return
@@ -204,25 +212,24 @@ def fetch_ffmpeg() -> None:
     print(f"   完成: {rel(FFMPEG_DIR)}")
 
 
-def report_custom_weights() -> None:
-    files = [
-        (ROOT / "models" / "Furina_GPT_SoVITS" / "Funina-e15.ckpt", "GPT 权重（约 148 MB）"),
-        (ROOT / "models" / "Furina_GPT_SoVITS" / "Funina_e8_s464.pth", "SoVITS 权重（约 165 MB）"),
-        (ROOT / "models" / "Furina_GPT_SoVITS" / "ref.wav", "参考音频（3~10 秒）"),
-    ]
-    missing = [(path, desc) for path, desc in files if not path.exists()]
+def fetch_furina() -> None:
+    print(f"\n[3/4] 芙宁娜音色权重 -> {FURINA_DIR}  (源: ModelScope leletxh/Furina_GPT_SoVITS)")
+    for name, size in FURINA_FILES:
+        download(f"{MS_FURINA_REPO}/{name}", FURINA_DIR / name, size)
+
+
+def report_reference_audio() -> None:
+    ref = FURINA_DIR / "ref.wav"
     print("\n" + "-" * 62)
-    if not missing:
-        print("芙宁娜音色权重也在，全部资源齐了。")
-        return
-    print("还差芙宁娜音色权重（没有公开下载地址，脚本不会下）：")
-    for path, desc in missing:
-        print(f"  - {rel(path)}   {desc}")
-    print("\n获取方式（任选其一）：")
-    print("  1. 从原来那台能跑语音的电脑，把整个 models/Furina_GPT_SoVITS/ 目录拷过来；")
-    print("  2. 到 https://github.com/yuf508925-max/Travel-Guide-pro/releases 看作者有没有上传；")
-    print("  3. 找作者要网盘链接。")
-    print("\n放好后运行：python voice-service\\check_assets.py")
+    if ref.exists():
+        print("参考音频 ref.wav 也在，全部资源齐了。")
+    else:
+        print("还差参考音频（脚本不下，3~10 秒干净人声的 wav）：")
+        print(f"  - {rel(ref)}")
+        print("\n获取方式：")
+        print("  1. 从原来那台能跑语音的电脑，拷一份 models/Furina_GPT_SoVITS/ref.wav；")
+        print("  2. 自己截一段 3~10 秒芙宁娜的语音，存成 wav 放进去。")
+    print("\n检查全部资源：python voice-service\\check_assets.py")
 
 
 def main() -> int:
@@ -231,6 +238,7 @@ def main() -> int:
     parser.add_argument("--with-v2-base", action="store_true", help="额外下载 v2 官方底模（只有切回官方 v2 音色时才需要）")
     parser.add_argument("--skip-g2pw", action="store_true", help="跳过 G2PW 多音字模型")
     parser.add_argument("--skip-ffmpeg", action="store_true", help="跳过 ffmpeg")
+    parser.add_argument("--skip-furina", action="store_true", help="跳过芙宁娜音色权重")
     parser.add_argument("--dry-run", action="store_true", help="只打印要下载什么，不真的下载")
     args = parser.parse_args()
 
@@ -253,6 +261,9 @@ def main() -> int:
             print(f"  - pretrained_models/{rel}  ({human(size)})")
         if not args.skip_g2pw:
             print("  - GPT_SoVITS/text/G2PWModel/（从 ModelScope 下载 zip 后解压）")
+        if not args.skip_furina:
+            for name, size in FURINA_FILES:
+                print(f"  - models/Furina_GPT_SoVITS/{name}  ({human(size)})  [ModelScope]")
         if not args.skip_ffmpeg:
             print("  - ffmpeg-bin/ffmpeg.exe、ffprobe.exe（从 gyan.dev 下载 zip 后解压）")
         print("\n（--dry-run：没有实际下载）")
@@ -260,15 +271,19 @@ def main() -> int:
 
     fetch_hf(args.hf_endpoint, files)
     if args.skip_g2pw:
-        print("\n[2/3] 已跳过 G2PW")
+        print("\n[2/4] 已跳过 G2PW")
     else:
         fetch_g2pw()
+    if args.skip_furina:
+        print("\n[3/4] 已跳过芙宁娜音色权重")
+    else:
+        fetch_furina()
     if args.skip_ffmpeg:
-        print("\n[3/3] 已跳过 ffmpeg")
+        print("\n[4/4] 已跳过 ffmpeg")
     else:
         fetch_ffmpeg()
 
-    report_custom_weights()
+    report_reference_audio()
     return 0
 
 
